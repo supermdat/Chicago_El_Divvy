@@ -95,16 +95,7 @@ external_divvy_data <- paste0(wd,
 dir.create(external_divvy_data)
 
 
-new_subfolder_name <- "Csv_Xlsx"
-external_divvy_data_csv_xlsx <- paste0(external_divvy_data,
-                                       "/",
-                                       new_subfolder_name
-                                       )
-
-dir.create(external_divvy_data_csv_xlsx)
-
-
-## Create a function to download and write the data to the proper folders
+## Create a function to download the data to the proper folders
 get_data_csv_xlsx <- function(url, folder_name) {
   f_url = url
   
@@ -130,72 +121,6 @@ get_data_csv_xlsx <- function(url, folder_name) {
                        fldr_name
                        )
         )
-  
-  # just get the .csv and .xlsx files for use
-  uz_names =
-    unzip(zipfile = zip_file_raw,
-          list = TRUE,
-          overwrite = TRUE,
-          ) %>% 
-    as.data.frame() %>% 
-    mutate(extension = str_extract(Name,
-                                   "(?<=\\.)[^\\.]*$"
-                                   )
-           ) %>% 
-    filter(extension == "csv" |
-             extension == "xls" |
-             extension == "xlsx"
-           )
-
-  # get the complete file path
-  fpath <- file.path(paste0(external_divvy_data,
-                            "/",
-                            fldr_name,
-                            "/",
-                            uz_names$Name
-                            )
-                     )
-  
-  # get the file names
-  file_names =
-      pmap(.l = list(a = uz_names$Name),
-           .f = function(a) {
-             if(str_detect(a, "/")
-                ) {
-               fn = a %>% 
-                 str_extract("(?<=/).*$")
-               } else {
-                 fn = a
-                 }
-             
-             return(fn)
-             }
-           )
-
-  # read the files
-  files_read = fpath %>%
-    map(~ fread(.x,
-                na.strings = c(""),
-                stringsAsFactors = FALSE,
-                showProgress = TRUE,
-                verbose = TRUE
-                )
-        )
-  
-  # write the files
-  files_write =
-    pmap(.l = list(a = files_read,
-                   b = file_names
-                   ),
-         .f = function(a, b) {
-           fwrite(a,
-                  file = paste0(external_divvy_data_csv_xlsx,
-                                "/",
-                                b
-                                )
-                  )
-           }
-         )
   }
 
 
