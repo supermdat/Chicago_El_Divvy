@@ -12,6 +12,8 @@
 # Data Munging
 library("tidyverse")
 library("magrittr")
+library("lubridate")
+library("data.table")
 
 
 ## Locate the working directory
@@ -33,8 +35,14 @@ str(data_el_original)
 
 data_el_format_vars <-
   data_el_original %>% 
+  mutate(date = ymd(date)
+         ) %>% 
   mutate_at(vars(daytype, stationname), factor) %>% 
-  mutate_at(vars(station_id, rides), as.numeric)
+  mutate_at(vars(station_id, rides), as.numeric) %>% 
+  as.data.table() %>% 
+  setkey(date,
+         station_id
+         )
 
 str(data_el_format_vars)
 summary(data_el_format_vars)
