@@ -14,7 +14,6 @@ library("readxl")
 # Data Munging
 library("tidyverse")
 library("lubridate")
-library("stringr")
 
 
 ## Locate the working directory
