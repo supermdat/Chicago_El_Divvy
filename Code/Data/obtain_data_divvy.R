@@ -12,7 +12,6 @@ library("data.table")
 
 # Data munging
 library("tidyverse")
-library("stringr")
 
 
 ## Set the working directory
