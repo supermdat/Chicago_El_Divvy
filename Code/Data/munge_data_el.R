@@ -4,7 +4,7 @@
 ## Code to take the Chicago subway ("El") data in its raw state and quickly update the
 ## variable formats for ease in processing/inspection/modeling.
 
-## The originla data can be found here:  https://data.cityofchicago.org/Transportation/CTA-Ridership-L-Station-Entries-Daily-Totals/5neh-572f
+## The original data can be found here:  https://data.cityofchicago.org/Transportation/CTA-Ridership-L-Station-Entries-Daily-Totals/5neh-572f
 
 
 ## Load the used libraries
