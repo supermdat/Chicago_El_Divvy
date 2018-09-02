@@ -1,0 +1,558 @@
+---
+title: "EDA & Forecasting"
+output: html_notebook
+---
+  
+## Setup    
+  Load the relevant libraries.
+```{r, message=FALSE, warning=FALSE}
+
+# rm(list = ls())
+# .rs.restartR()
+
+
+# data manipulation
+library("plyr")
+library("tidyverse")
+library("magrittr")
+library("data.table")
+library("lubridate")
+library("sqldf")
+
+
+# time series specific packages
+library("timetk")
+library("zoo")
+library("tibbletime")
+
+
+# modeling
+library("fpp2")
+# library("forecast")
+library("prophet")
+library("caret")
+library("randomForest")
+library("xgboost")
+library("glmnet")
+library("neuralnet")
+library("nnet")
+library("gam")
+library("RANN")               # kNN (used in caret NA imputation)
+library("keras")
+# use_session_with_seed(123456789) # setting the seed to obtain reproducible results
+# see https://keras.rstudio.com/articles/faq.html#how-can-i-obtain-reproducible-results-using-keras-during-development and https://cran.r-project.org/web/packages/keras/vignettes/faq.html
+# can also re-enable gpu and parallel processing by using:  use_session_with_seed(42, disable_gpu = FALSE, disable_parallel_cpu = FALSE)
+
+
+# other
+library("geosphere")          # specific for distance calculations from lat-lon pairs
+
+library("recipes")            # used in Keras modeling to design matrices
+library("tfruns")             # used in Keras modeling for trainin runs
+library("stringr")            # string manipulation
+library("ggplot2")            # viz
+library("rsample")            # rolling samples for validation stats
+library("sweep")              # more easily pull out model statistics
+library("doParallel")         # parallel processing
+library("rlang")              # building functions
+# library("tis")                # get holiday data
+# 
+# 
+# library("tidytext")           # text manipulation
+# library("topicmodels")        # topic modeling
+# library("ldatuning")          # estimating the proper number of topics
+
+```
+  
+    
+  Session Info.
+```{r}
+
+sessionInfo()
+
+```
+  
+    
+  Setup the root directory.
+```{r "setup", include = FALSE}
+
+require("knitr")
+
+opts_knit$set(root.dir = "/Users/mdturse/Desktop/Analytics/Chicago_El_Divvy/")
+
+```
+  
+    
+  Setting `wd` as the working directory.
+```{r}
+
+wd <- getwd()
+
+wd
+
+```
+  
+    
+## Obtain Data  
+    
+  Note that the raw data were obtained and transformed into .Rds files in separate .R scripts. For full details, see [https://github.com/supermdat/Chicago_El_Divvy](https://github.com/supermdat/Chicago_El_Divvy).  
+    
+  Import the relevant .Rds files.
+```{r}
+
+rds_file_paths <-
+  list.files(path = paste0(wd,
+                           "/Data/Processed"
+                           ),
+             pattern = "\\.*.Rds",
+             full.names = TRUE
+             )
+
+rds_file_paths
+
+
+rds_file_names <-
+  str_replace(string = rds_file_paths,
+              pattern = ".*/",
+              replacement = ""
+              )
+
+# not importing the intermediate weather data
+index_not_weather <-
+  str_detect(string = rds_file_paths, pattern = "^(?!.*data_weather.Rds)")
+
+rds_files <-
+  rds_file_paths[index_not_weather] %>% 
+  map(~ readRDS(file = .x)
+      )
+
+names(rds_files) <- rds_file_names[index_not_weather]
+
+
+pmap(.l = list(a = rds_files,
+               b = names(rds_files)
+               ),
+     .f = function(a, b) {
+       message(b)
+       
+       str(a)
+       }
+     )
+
+
+rm(rds_file_names, rds_file_paths, index_not_weather)
+
+```
+
+    
+## Distance Between El and Divvy  
+  
+  I think the proximity of a close Divvy station could affect El ridership, so here, I'll calculate:
+  1. The distance between El and Divvy stations; and
+  2. The number of Divvy stations that are "close" to an El station  
+    
+### "Crow Flies" Distance  
+  
+  First, I just get get the necessary data sets. **Note 1:** As data for Divvy stations regularly includes multiple latitude and longitude values for the same station, I will simply take the average of these values. **Note 2:** As data for Divvy stations regularly include multiple values for when a station began (`online_date`), I will simply take the oldest of these values. **Note 3:** The first Divvy station and trip occurred in June 2013, so to have complete data, I will begin analyses from July 2013 onward.
+```{r}
+
+el_stations_latlon <-
+  rds_files$data_el_stations_format_vars.Rds %>% 
+  select(stop_id,
+         lat,
+         lon
+         ) %>% 
+  distinct() %>% 
+  rename(el_stop_id = stop_id,
+         el_lat = lat,
+         el_lon = lon
+         ) %>% 
+  mutate(temp_col_for_joining = 1)
+
+message("el_stations_latlon")
+str(el_stations_latlon)
+View(el_stations_latlon)
+
+
+divvy_stations_latlon <-
+  rds_files$divvy_data_stations.Rds %>% 
+  group_by(id) %>% 
+  summarise(divvy_lat = mean(latitude, na.rm = TRUE),
+            divvy_lon = mean(longitude, na.rm = TRUE)
+            ) %>% 
+  ungroup() %>% 
+  arrange(id)
+
+# View(divvy_stations_latlon)
+# View(rds_files$divvy_data_stations.Rds)
+
+divvy_stations_online_date <-
+  rds_files$divvy_data_stations.Rds %>% 
+  group_by(id) %>% 
+  summarise(divvy_online_date_min = min(online_date, na.rm = TRUE)
+            ) %>% 
+  ungroup() %>% 
+  arrange(id)
+
+# View(divvy_stations_online_date)
+
+divvy_stations_latlon_online <-
+  divvy_stations_latlon %>% 
+  left_join(y = divvy_stations_online_date,
+            by = "id"
+            ) %>% 
+  rename(divvy_station_id = id) %>% 
+  mutate(temp_col_for_joining = 1)
+
+View(divvy_stations_latlon_online)
+message("divvy_stations_latlon_online")
+summary(divvy_stations_latlon_online)
+
+message("divvy_stations_latlon_online$divvy_online_date_min")
+summary(divvy_stations_latlon_online$divvy_online_date_min)
+message("ds_files$data_divvy_trips.Rds$start_dt")
+summary(rds_files$data_divvy_trips.Rds$start_dt)
+
+
+rm(divvy_stations_latlon, divvy_stations_online_date)
+
+```
+  
+    
+  Now I simply get the unique combinations of El stations and Divvy stations into one dataset.
+```{r}
+
+stations_el_divvy_all <-
+  el_stations_latlon %>% 
+  inner_join(y = divvy_stations_latlon_online,
+             by = "temp_col_for_joining"
+             ) %>% 
+  arrange(el_stop_id,
+          divvy_station_id
+          ) %>% 
+  select(-temp_col_for_joining)
+
+str(stations_el_divvy_all)
+View(stations_el_divvy_all %>% head(1000))
+
+
+# rm(el_stations_latlon)
+rm(divvy_stations_latlon_online)
+
+```
+  
+    
+  Here I calculate the Haversine ("crow flies") distance. This is not exactly the same as the walking distance (e.g., from Google Maps), but it should be similar, and this calculation avoids having to pay for using the Google Distance Matrix API).
+```{r}
+
+# user  system elapsed 
+#  71.129   6.037  79.484
+system.time(
+distance_el_divvy_stations <-
+  stations_el_divvy_all %>% 
+  mutate(dist_miles = by(data = stations_el_divvy_all,
+                         INDICES = 1:nrow(stations_el_divvy_all),
+                         FUN = function(row) {
+                           distHaversine(p1 = c(row$el_lon, row$el_lat),
+                                         p2 = c(row$divvy_lon, row$divvy_lat)
+                                         )
+                           }
+                         ) / 1609.344, # meters in 1 mile
+         dist_miles = as.numeric(dist_miles), # this is done to force the variable to be numeric instead of 'by' numeric
+         temp_col_for_joining = 1
+         ) %>% 
+  as.data.table() %>% 
+  setkey(temp_col_for_joining,
+         el_stop_id,
+         divvy_online_date_min
+         # dist_miles
+         )
+)
+  
+str(distance_el_divvy_stations)
+summary(distance_el_divvy_stations)
+
+View(head(distance_el_divvy_stations, 1000))
+
+rm(stations_el_divvy_all)
+
+```
+  
+  
+## Calculate a feature counting the number of Divvy Stations within X miles of every El Station (on every day)
+  
+    
+  As some Divvy stations came online (came into use) on diffrent dates, here I manipulate the data to ensure combinations of El-Divvy stations are only counted after the Divvy station is in operation.  
+    
+  First, I create the dataframe of all dates used in the analyses (2013-07-01 to 2018-01-01).
+```{r}
+
+el_dates <-
+  data.frame("el_date" = seq(from = ymd("2013-07-01"),
+                             to = ymd("2018-01-01"),
+                             by ="day"
+                             )
+             ) %>% 
+  mutate(temp_col_for_joining = 1) %>% 
+  as.data.table() %>% 
+  setkey(temp_col_for_joining,
+         el_date
+         )
+
+message("el_dates")
+str(el_dates)
+
+```
+  
+    
+  Now, for those instances when the el_station--divvy_station distance is 0.5 miles or below, I create a dataset that incorporates these combinations with all `el_dates` dates (i.e., all the dates in the analyses).
+```{r}
+
+el_divvy_distance_setting <- 0.5
+
+dist_miles_pt5 <-
+  distance_el_divvy_stations[dist_miles <= el_divvy_distance_setting]
+
+View(dist_miles_pt5)
+rm(el_divvy_distance_setting)
+
+
+# user  system elapsed 
+#   1.295   0.334   1.725 
+system.time(
+  full_dates_dt <-
+    merge(x = el_dates,
+          # y = distance_el_divvy_stations,
+          y = dist_miles_pt5,
+          by.x = "temp_col_for_joining",
+          by.y = "temp_col_for_joining",
+          all = TRUE,
+          allow.cartesian = TRUE
+          ) %>% 
+    setkey(el_stop_id,
+           el_date,
+           divvy_online_date_min
+           )
+  )
+
+message("full_dates_dt")
+str(full_dates_dt)
+View(full_dates_dt %>% tail(10000))
+rm(dist_miles_pt5)
+
+```
+  
+    
+  Now I limit the dataset to only those `el_dates` that appear **AFTER** `divvy_online_date_min` (the date the Divvy station was made available).
+```{r}
+
+within_pt5miles_after_online <-
+  full_dates_dt[ , c("temp_col_for_joining",
+                     "el_lat",
+                     "el_lon",
+                     "divvy_lat",
+                     "divvy_lon"
+                     ) := NULL
+                 ][el_date >= divvy_online_date_min
+                   ][order(el_date,
+                           el_stop_id,
+                           dist_miles
+                           )
+                     ]
+
+message("within_pt5miles_after_online")
+str(within_pt5miles_after_online)
+View(tail(within_pt5miles_after_online, 15000))
+rm(full_dates_dt)
+
+```
+  
+    
+  Here, for each `el_stop_id` and `el_date`, I count the number of instances - which are the number of Divvy stations within 0.5 miles of the El station on that day
+```{r}
+
+within_pt5miles_cnts_el_stop_date <-
+  within_pt5miles_after_online %>% 
+  count(el_stop_id,
+        el_date
+        ) %>% 
+  rename(num_divvy_stns_pt5_miles = n)
+
+message("within_pt5miles_cnts_el_stop_date")
+str(within_pt5miles_cnts_el_stop_date)
+View(head(within_pt5miles_cnts_el_stop_date, 15000))
+rm(within_pt5miles_after_online)
+
+```
+  
+    
+  For each unique combination of `el_stations` and `el_dates`, now I add in the number of Divvy stations within 0.5 miles (as of that date). This will be a variable used when modeling/forecasting.
+```{r}
+
+el_stations_all_dates <-
+  el_dates %>% 
+  inner_join(y = el_stations_latlon %>% select(el_stop_id, temp_col_for_joining),
+             by = "temp_col_for_joining"
+             ) %>% 
+  arrange(el_stop_id,
+          el_date
+          ) %>% 
+  select(el_stop_id,
+         el_date
+         )
+
+message("el_stations_all_dates")
+str(el_stations_all_dates)
+View(el_stations_all_dates %>% head(1000))
+rm(el_dates, el_stations_latlon)
+
+
+
+el_stns_full_dates_within_pt5 <-
+  el_stations_all_dates %>% 
+  left_join(y = within_pt5miles_cnts_el_stop_date,
+            by = c("el_stop_id" = "el_stop_id",
+                   "el_date" = "el_date"
+                   )
+            ) %>% 
+  mutate(num_divvy_stns_pt5_miles = if_else(is.na(num_divvy_stns_pt5_miles),
+                                            as.integer(0),
+                                            num_divvy_stns_pt5_miles
+                                            )
+         ) %>% 
+  as.data.table() %>% 
+  setkey(el_stop_id,
+         el_date
+         )
+
+message("el_stns_full_dates_within_pt5")
+str(el_stns_full_dates_within_pt5)
+View(head(el_stns_full_dates_within_pt5, 15000))
+rm(within_pt5miles_cnts_el_stop_date)
+
+
+## Save the original data to the proper folder
+saveRDS(el_stns_full_dates_within_pt5,
+        paste0(wd,
+               "/Data/Interim/",
+               "el_stns_full_dates_within_pt5.Rds"
+               )
+        )
+
+
+# confirming the steps above worked
+message("distance_el_divvy_stations")
+str(distance_el_divvy_stations)
+View(distance_el_divvy_stations[el_stop_id == 30001][order(dist_miles)])
+
+```
+  
+    
+## Calculate a feature calculating the closest Divvy station to each El station (on every day)
+**Note:** This must be done for each combination of date and El station as Divvy stations are only online (made available) after certain dates.  
+  
+  Because the combination of data leads to a very large data file, I use `purrr:pmap` to do the joining separatey for each `el_stop_id`, and then combine the results into a single data.table.  
+    
+  Here I create the data.tables to use - duplicate variables for `el_date2` and `divvy_online_date_min` are created for the purpose of merging the datasets.
+```{r}
+
+message("el_stations_all_dates")
+str(el_stations_all_dates)
+message("distance_el_divvy_stations")
+str(distance_el_divvy_stations)
+
+el_stations_all_dates_dt <-
+  el_stations_all_dates %>% 
+  mutate(el_date2 = el_date) %>% 
+  as.data.table() %>% 
+  setkey(el_stop_id,
+         el_date2
+         )
+
+distance_el_divvy_stations_dt <-
+  distance_el_divvy_stations[ , divvy_online_date_min2 := divvy_online_date_min] %>% 
+  setkey(el_stop_id,
+         divvy_online_date_min2
+         )
+
+message("el_stations_all_dates_dt")
+str(el_stations_all_dates_dt)
+message("distance_el_divvy_stations_dt")
+str(distance_el_divvy_stations_dt)
+
+
+rm(el_stations_all_dates, distance_el_divvy_stations)
+
+```
+  
+    
+  Now, using `purrr:pmap` I perferom the merge for each value of `el_stop_id`, then I put the results together into a single data.table.
+```{r}
+
+## create the distinct values for el_stop_id
+el_stns_dstnct <-
+  el_stations_all_dates_dt %>% 
+  select(el_stop_id) %>% 
+  distinct() %>% 
+  pull()
+
+
+## the merge itself
+# user  system elapsed 
+#  41.665  13.718  61.665
+system.time(
+pmap_merge <-
+  pmap(.l = list(a = el_stns_dstnct),
+       .f = function(a) {
+         # create small data.tables
+         sngle_el_stn_all_dates = el_stations_all_dates_dt[el_stop_id == a]
+         sngle_dstnc_el_divvy_stns = distance_el_divvy_stations_dt[el_stop_id == a]
+         
+         # try the merge
+         full_dt =
+           sngle_dstnc_el_divvy_stns[sngle_el_stn_all_dates,
+                                     on = .(el_stop_id = el_stop_id,
+                                            divvy_online_date_min2 <= el_date2
+                                            ),
+                                     allow.cartesian = TRUE
+                                     ][ ,
+                                       .(min_dist_miles = min(dist_miles)
+                                         ),
+                                       keyby = c("el_stop_id", "el_date")
+                                       ]
+         
+         return(full_dt)
+         }
+       )
+)
+
+
+## create the single data.table
+el_stns_full_dates_miles_to_closest_divvy <-
+  bind_rows(pmap_merge) %>% 
+  setkey(el_stop_id,
+         el_date
+         )
+
+str(el_stns_full_dates_miles_to_closest_divvy)
+glimpse(el_stns_full_dates_miles_to_closest_divvy)
+
+
+## Save the original data to the proper folder
+saveRDS(el_stns_full_dates_miles_to_closest_divvy,
+        paste0(wd,
+               "/Data/Interim/",
+               "el_stns_full_dates_miles_to_closest_divvy.Rds"
+               )
+        )
+
+
+rm(el_stns_dstnct, pmap_merge)
+
+```
+
+
+
+
+
+
