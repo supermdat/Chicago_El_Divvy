@@ -46,6 +46,7 @@ library("keras")
 
 # other
 library("geosphere")          # specific for distance calculations from lat-lon pairs
+library("naniar")             # inspecting missing data
 
 library("recipes")            # used in Keras modeling to design matrices
 library("tfruns")             # used in Keras modeling for trainin runs
@@ -158,12 +159,13 @@ rm(rds_file_names, rds_file_paths, index_not_weather)
 
 el_stations_latlon <-
   rds_files$data_el_stations_format_vars.Rds %>% 
-  select(stop_id,
+  select(#stop_id,
+         map_id,
          lat,
          lon
          ) %>% 
   distinct() %>% 
-  rename(el_stop_id = stop_id,
+  rename(el_stop_id = map_id,
          el_lat = lat,
          el_lon = lon
          ) %>% 
@@ -171,7 +173,7 @@ el_stations_latlon <-
 
 message("el_stations_latlon")
 str(el_stations_latlon)
-View(el_stations_latlon)
+# View(el_stations_latlon)
 
 
 divvy_stations_latlon <-
@@ -204,13 +206,13 @@ divvy_stations_latlon_online <-
   rename(divvy_station_id = id) %>% 
   mutate(temp_col_for_joining = 1)
 
-View(divvy_stations_latlon_online)
+# View(divvy_stations_latlon_online)
 message("divvy_stations_latlon_online")
 summary(divvy_stations_latlon_online)
 
 message("divvy_stations_latlon_online$divvy_online_date_min")
 summary(divvy_stations_latlon_online$divvy_online_date_min)
-message("ds_files$data_divvy_trips.Rds$start_dt")
+message("rds_files$data_divvy_trips.Rds$start_dt")
 summary(rds_files$data_divvy_trips.Rds$start_dt)
 
 
@@ -233,7 +235,7 @@ stations_el_divvy_all <-
   select(-temp_col_for_joining)
 
 str(stations_el_divvy_all)
-View(stations_el_divvy_all %>% head(1000))
+# View(stations_el_divvy_all %>% head(1000))
 
 
 # rm(el_stations_latlon)
@@ -246,7 +248,7 @@ rm(divvy_stations_latlon_online)
 ```{r}
 
 # user  system elapsed 
-#  71.129   6.037  79.484
+#  32.793   3.027  36.038
 system.time(
 distance_el_divvy_stations <-
   stations_el_divvy_all %>% 
@@ -272,7 +274,7 @@ distance_el_divvy_stations <-
 str(distance_el_divvy_stations)
 summary(distance_el_divvy_stations)
 
-View(head(distance_el_divvy_stations, 1000))
+# View(head(distance_el_divvy_stations, 1000))
 
 rm(stations_el_divvy_all)
 
@@ -313,12 +315,12 @@ el_divvy_distance_setting <- 0.5
 dist_miles_pt5 <-
   distance_el_divvy_stations[dist_miles <= el_divvy_distance_setting]
 
-View(dist_miles_pt5)
+# View(dist_miles_pt5)
 rm(el_divvy_distance_setting)
 
 
 # user  system elapsed 
-#   1.295   0.334   1.725 
+#   0.413   0.082   0.541
 system.time(
   full_dates_dt <-
     merge(x = el_dates,
@@ -337,7 +339,7 @@ system.time(
 
 message("full_dates_dt")
 str(full_dates_dt)
-View(full_dates_dt %>% tail(10000))
+# View(full_dates_dt %>% tail(10000))
 rm(dist_miles_pt5)
 
 ```
@@ -362,7 +364,7 @@ within_pt5miles_after_online <-
 
 message("within_pt5miles_after_online")
 str(within_pt5miles_after_online)
-View(tail(within_pt5miles_after_online, 15000))
+# View(within_pt5miles_after_online %>% filter(el_stop_id == 40090))
 rm(full_dates_dt)
 
 ```
@@ -380,8 +382,8 @@ within_pt5miles_cnts_el_stop_date <-
 
 message("within_pt5miles_cnts_el_stop_date")
 str(within_pt5miles_cnts_el_stop_date)
-View(head(within_pt5miles_cnts_el_stop_date, 15000))
-rm(within_pt5miles_after_online)
+# View(within_pt5miles_cnts_el_stop_date %>% filter(el_stop_id == 40090))
+# rm(within_pt5miles_after_online)
 
 ```
   
@@ -403,7 +405,7 @@ el_stations_all_dates <-
 
 message("el_stations_all_dates")
 str(el_stations_all_dates)
-View(el_stations_all_dates %>% head(1000))
+# View(el_stations_all_dates %>% head(1000))
 rm(el_dates, el_stations_latlon)
 
 
@@ -411,6 +413,11 @@ rm(el_dates, el_stations_latlon)
 el_stns_full_dates_within_pt5 <-
   el_stations_all_dates %>% 
   left_join(y = within_pt5miles_cnts_el_stop_date,
+            by = c("el_stop_id" = "el_stop_id",
+                   "el_date" = "el_date"
+                   )
+            ) %>% 
+  left_join(y = within_pt5miles_after_online,
             by = c("el_stop_id" = "el_stop_id",
                    "el_date" = "el_date"
                    )
@@ -427,7 +434,7 @@ el_stns_full_dates_within_pt5 <-
 
 message("el_stns_full_dates_within_pt5")
 str(el_stns_full_dates_within_pt5)
-View(head(el_stns_full_dates_within_pt5, 15000))
+# View(el_stns_full_dates_within_pt5 %>% filter(el_stop_id == 40090))
 rm(within_pt5miles_cnts_el_stop_date)
 
 
@@ -443,7 +450,13 @@ saveRDS(el_stns_full_dates_within_pt5,
 # confirming the steps above worked
 message("distance_el_divvy_stations")
 str(distance_el_divvy_stations)
-View(distance_el_divvy_stations[el_stop_id == 30001][order(dist_miles)])
+# View(distance_el_divvy_stations[el_stop_id == 40090 &
+#                                   dist_miles <= 0.5
+#                                 ][order(divvy_online_date_min)]
+#      )
+
+
+rm(within_pt5miles_after_online)
 
 ```
   
@@ -475,6 +488,16 @@ distance_el_divvy_stations_dt <-
          divvy_online_date_min2
          )
 
+
+## Save the original data to the proper folder
+saveRDS(distance_el_divvy_stations_dt,
+        paste0(wd,
+               "/Data/Interim/",
+               "distance_el_divvy_stations_dt.Rds"
+               )
+        )
+
+
 message("el_stations_all_dates_dt")
 str(el_stations_all_dates_dt)
 message("distance_el_divvy_stations_dt")
@@ -486,7 +509,7 @@ rm(el_stations_all_dates, distance_el_divvy_stations)
 ```
   
     
-  Now, using `purrr:pmap` I perferom the merge for each value of `el_stop_id`, then I put the results together into a single data.table.
+  Now, using `purrr:pmap` I perform the merge for each value of `el_stop_id`, then I put the results together into a single data.table.
 ```{r}
 
 ## create the distinct values for el_stop_id
@@ -499,7 +522,7 @@ el_stns_dstnct <-
 
 ## the merge itself
 # user  system elapsed 
-#  41.665  13.718  61.665
+# 108.265   4.020 113.568
 system.time(
 pmap_merge <-
   pmap(.l = list(a = el_stns_dstnct),
@@ -508,20 +531,39 @@ pmap_merge <-
          sngle_el_stn_all_dates = el_stations_all_dates_dt[el_stop_id == a]
          sngle_dstnc_el_divvy_stns = distance_el_divvy_stations_dt[el_stop_id == a]
          
-         # try the merge
+         # the merge
          full_dt =
            sngle_dstnc_el_divvy_stns[sngle_el_stn_all_dates,
                                      on = .(el_stop_id = el_stop_id,
                                             divvy_online_date_min2 <= el_date2
                                             ),
                                      allow.cartesian = TRUE
-                                     ][ ,
-                                       .(min_dist_miles = min(dist_miles)
-                                         ),
-                                       keyby = c("el_stop_id", "el_date")
-                                       ]
+                                     ]
+         # [ ,
+         #                               .(min_dist_miles = min(dist_miles)
+         #                                 ),
+         #                               keyby = c("el_stop_id", "el_date")
+         #                               ]
          
-         return(full_dt)
+         min_dt =
+           full_dt %>% 
+           group_by(el_stop_id,
+                    el_date
+                    ) %>% 
+           top_n(n = -1, wt = dist_miles) %>% 
+           ungroup() %>% 
+           rename(min_dist_miles = dist_miles) %>% 
+           select(el_stop_id,
+                  el_date,
+                  min_dist_miles,
+                  divvy_station_id
+                  ) %>% 
+           as.data.table() %>% 
+           setkey(el_stop_id,
+                  el_date
+                  )
+         
+         return(min_dt)
          }
        )
 )
@@ -530,12 +572,13 @@ pmap_merge <-
 ## create the single data.table
 el_stns_full_dates_miles_to_closest_divvy <-
   bind_rows(pmap_merge) %>% 
+  distinct() %>% 
   setkey(el_stop_id,
          el_date
          )
 
 str(el_stns_full_dates_miles_to_closest_divvy)
-glimpse(el_stns_full_dates_miles_to_closest_divvy)
+# View(el_stns_full_dates_miles_to_closest_divvy[el_stop_id == 40090])
 
 
 ## Save the original data to the proper folder
@@ -547,12 +590,1618 @@ saveRDS(el_stns_full_dates_miles_to_closest_divvy,
         )
 
 
-rm(el_stns_dstnct, pmap_merge)
+rm(el_stns_dstnct, pmap_merge, el_stations_all_dates_dt)
+
+```
+  
+    
+## Munge Divvy trips data into something more usable  
+    
+  Inspecting divvy trips by day. First, looking at groupings of the "from" station to the "to" station. These data are interesting, but look too infrequent to be very useful. Also, I don't believe the analyses at this level will vary greatly on where the trip was going to.
+```{r}
+
+message("rds_files$data_divvy_trips.Rds")
+str(rds_files$data_divvy_trips.Rds)
+
+
+divvy_trips_by_day_from_to <-
+  rds_files$data_divvy_trips.Rds[ , start_date:= as_date(start_dt)
+                                 ][ ,
+                                   .(trips_cnt = .N,
+                                     # trip_duration_mean = mean(tripduration, na.rm = TRUE),
+                                     # trip_duration_med = median(tripduration, na.rm = TRUE),
+                                     trip_duration_sum = sum(tripduration)
+                                     ),
+                                   keyby = c("start_date",
+                                             "usertype",
+                                             "from_station_id",
+                                             "to_station_id"
+                                             )
+                                   ]
+
+message("divvy_trips_by_day_from_to")
+str(divvy_trips_by_day_from_to)
+# View(tail(divvy_trips_by_day_from_to, 1000))
+
+
+rm(divvy_trips_by_day_from_to)
+
+```
+  
+    
+  So here, I create counts, and `tripduration` stats based on the `start_date` and the `from_station_id`.
+```{r}
+
+divvy_trips_by_day_from_l <-
+  rds_files$data_divvy_trips.Rds[ , start_date:= as_date(start_dt)
+                                 ][ ,
+                                   .(trip_cnt__dayfrom = .N,
+                                     # trip_duration_mean__dayfrom =
+                                     #   mean(tripduration, na.rm = TRUE),
+                                     # trip_duration_med__dayfrom =
+                                     #   median(tripduration, na.rm = TRUE),
+                                     trip_duration_sum__dayfrom =
+                                       sum(tripduration)
+                                     ),
+                                   keyby = c("start_date",
+                                             "usertype",
+                                             "from_station_id"
+                                             )
+                                   ]
+
+message("divvy_trips_by_day_from_l")
+str(divvy_trips_by_day_from_l)
+# View(divvy_trips_by_day_from_l[from_station_id == 238])
+
+```
+  
+    
+  Munge the data into a "wider" format based on the `usertype` value.
+```{r}
+
+divvy_trips_by_day_from <-
+  divvy_trips_by_day_from_l %>% 
+  gather(key = variable,
+         value = value,
+         trip_cnt__dayfrom:trip_duration_sum__dayfrom
+         ) %>% 
+  unite(col = temp,
+        usertype,
+        variable,
+        sep = "_"
+        ) %>%
+  spread(key = temp,
+         value = value,
+         fill = 0
+         ) %>% 
+  as.data.table() %>% 
+  setkey(start_date,
+         from_station_id
+         )
+
+message("divvy_trips_by_day_from")
+str(divvy_trips_by_day_from)
+# View(divvy_trips_by_day_from[from_station_id == 238])
+
+
+## Save the data to the proper folder
+saveRDS(divvy_trips_by_day_from,
+        paste0(wd,
+               "/Data/Interim/",
+               "divvy_trips_by_day_from.Rds"
+               )
+        )
+
+
+## Quick plot inspection
+frequently_used_station <-
+  divvy_trips_by_day_from %>% 
+  top_n(n = 1, wt = Subscriber_trip_cnt__dayfrom) %>% 
+  pull(from_station_id)
+
+divvy_trips_by_day_from[from_station_id == frequently_used_station] %>% 
+  ggplot(aes(x = start_date,
+             y = Subscriber_trip_cnt__dayfrom
+             )
+         ) +
+  geom_line()
+
+
+rm(frequently_used_station, divvy_trips_by_day_from_l)
+
+```
+
+  And now I create counts, and `tripduration` stats based on the `start_date` (i.e., without considering `from_station_id`).
+```{r}
+
+divvy_trips_by_day_l <-
+  rds_files$data_divvy_trips.Rds[ , start_date:= as_date(start_dt)
+                                 ][ ,
+                                   .(trip_cnt__day = .N,
+                                     trip_duration_mean__day =
+                                       mean(tripduration, na.rm = TRUE),
+                                     trip_duration_med__day =
+                                       median(tripduration, na.rm = TRUE)
+                                     ),
+                                   keyby = c("start_date",
+                                             "usertype"
+                                             )
+                                   ]
+
+message("divvy_trips_by_day_l")
+str(divvy_trips_by_day_l)
+# View(divvy_trips_by_day_l)
+
+```
+  
+    
+  As above, here I create a wider dataset vased on the `usertype` value.
+```{r}
+
+divvy_trips_by_day <-
+  divvy_trips_by_day_l %>% 
+  gather(key = variable,
+         value = value,
+         trip_cnt__day:trip_duration_med__day
+         ) %>% 
+  unite(col = temp,
+        usertype,
+        variable,
+        sep = "_"
+        ) %>%
+  spread(key = temp,
+         value = value,
+         fill = 0
+         ) %>% 
+  as.data.table() %>% 
+  setkey(start_date)
+
+message("divvy_trips_by_day")
+str(divvy_trips_by_day)
+# View(divvy_trips_by_day)
+
+
+## Save the data to the proper folder
+saveRDS(divvy_trips_by_day,
+        paste0(wd,
+               "/Data/Interim/",
+               "divvy_trips_by_day.Rds"
+               )
+        )
+
+
+## Quick plot inspection
+divvy_trips_by_day %>% 
+  ggplot(aes(x = start_date,
+             y = Subscriber_trip_cnt__day
+             )
+         ) +
+  geom_line()
+
+
+rm(divvy_trips_by_day_l)
+
+```
+
+
+## New Features
+
+### Within 0.5 Miles, Create Station Counts, Trip Counts, and Trip Time Statistics  
+  
+  Original merge of the datasets.
+```{r}
+
+message("el_stns_full_dates_within_pt5")
+str(el_stns_full_dates_within_pt5)
+message("divvy_trips_by_day_from")
+str(divvy_trips_by_day_from)
+# View(divvy_trips_by_day_from[from_station_id == 238])
+
+
+the_merge <-
+  merge(x = el_stns_full_dates_within_pt5,
+        y = divvy_trips_by_day_from,
+        by.x = c("el_date", "divvy_station_id"),
+        by.y = c("start_date", "from_station_id"),
+        all.x = TRUE
+        )
+
+message("the_merge")
+str(the_merge)
+# View(the_merge[el_stop_id == 40090])
+
+```
+  
+    
+  Creating summed variables grouped by `el_date`, `el_stop_id`, and `num_divvy_stns_pt5_miles`
+```{r}
+
+new_vars_by <-
+  the_merge[ ,
+            .(c_tripcnt__dayfrom = sum(Customer_trip_cnt__dayfrom),
+              c_tripduration_sum__dayfrom = sum(Customer_trip_duration_sum__dayfrom),
+              d_tripcnt__dayfrom = sum(Dependent_trip_cnt__dayfrom),
+              d_tripduration_sum__dayfrom = sum(Dependent_trip_duration_sum__dayfrom),
+              s_tripcnt__dayfrom = sum(Subscriber_trip_cnt__dayfrom),
+              s_tripduration_sum__dayfrom = sum(Subscriber_trip_duration_sum__dayfrom)
+              ),
+            keyby = c("el_date", "el_stop_id", "num_divvy_stns_pt5_miles")
+            ]
+
+str(new_vars_by)
+
+```
+  
+    
+  Creating a new variable for the mean trip duration, and if any new variable is NA, this means no trips, so change NA to 0 (zero).
+```{r}
+
+new_vars_1 <-
+  new_vars_by[ ,
+              `:=` (c_tripduration_mean__dayfrom =
+                      c_tripduration_sum__dayfrom / c_tripcnt__dayfrom,
+                    d_tripduration_mean__dayfrom =
+                      d_tripduration_sum__dayfrom / d_tripcnt__dayfrom,
+                    s_tripduration_mean__dayfrom =
+                      s_tripduration_sum__dayfrom / s_tripcnt__dayfrom
+                    )
+              ]
+
+message("new_vars_1")
+str(new_vars_1)
+rm(new_vars_by)
+
+
+
+new_vars_2 <-
+  new_vars_1[ ,
+             `:=` (Customer_tripcnt__dayfrom =
+                     if_else(num_divvy_stns_pt5_miles >= 0 &
+                               is.na(c_tripcnt__dayfrom),
+                             as.numeric(0),
+                             c_tripcnt__dayfrom
+                             ),
+                   Customer_tripduration_mean__dayfrom =
+                     if_else(num_divvy_stns_pt5_miles >= 0 &
+                               is.na(c_tripduration_mean__dayfrom),
+                             as.numeric(0),
+                             c_tripduration_mean__dayfrom
+                             ),
+                   Dependent_tripcnt__dayfrom =
+                     if_else(num_divvy_stns_pt5_miles >= 0 &
+                               is.na(d_tripcnt__dayfrom),
+                             as.numeric(0),
+                             d_tripcnt__dayfrom
+                             ),
+                   Dependent_tripduration_mean__dayfrom =
+                     if_else(num_divvy_stns_pt5_miles >= 0 &
+                               is.na(d_tripduration_mean__dayfrom),
+                             as.numeric(0),
+                             d_tripduration_mean__dayfrom
+                             ),
+                   Subscriber_tripcnt__dayfrom =
+                     if_else(num_divvy_stns_pt5_miles >= 0 &
+                               is.na(s_tripcnt__dayfrom),
+                             as.numeric(0),
+                             s_tripcnt__dayfrom
+                             ),
+                   Subscriber_tripduration_mean__dayfrom =
+                     if_else(num_divvy_stns_pt5_miles >= 0 &
+                               is.na(s_tripduration_mean__dayfrom),
+                             as.numeric(0),
+                             s_tripduration_mean__dayfrom
+                             )
+                   )
+             ]
+
+message("new_vars_2")
+str(new_vars_2)
+rm(new_vars_1)
+
+```
+  
+    
+  Remove no-longer-needed variables and rename the kept variables.
+```{r}
+
+clean_vars <-
+  new_vars_2[ , c("c_tripduration_sum__dayfrom",
+                  "c_tripcnt__dayfrom",
+                  "c_tripduration_mean__dayfrom",
+                  "d_tripduration_sum__dayfrom",
+                  "d_tripcnt__dayfrom",
+                  "d_tripduration_mean__dayfrom",
+                  "s_tripduration_sum__dayfrom",
+                  "s_tripcnt__dayfrom",
+                  "s_tripduration_mean__dayfrom"
+                  ) := NULL
+              ] %>% 
+  rename(divvy_pt5mi_stn_cnt = num_divvy_stns_pt5_miles,
+         divvy_pt5mi_trip_cnt_cus = Customer_tripcnt__dayfrom,
+         divvy_pt5mi_triptime_mean_cus = Customer_tripduration_mean__dayfrom,
+         divvy_pt5mi_trip_cnt_dep = Dependent_tripcnt__dayfrom,
+         divvy_pt5mi_triptime_mean_dep = Dependent_tripduration_mean__dayfrom,
+         divvy_pt5mi_trip_cnt_sub = Subscriber_tripcnt__dayfrom,
+         divvy_pt5mi_triptime_mean_sub = Subscriber_tripduration_mean__dayfrom
+         )
+
+rm(new_vars_2)
+
+
+# Confirm everything worked
+# View(the_merge %>% filter(el_stop_id == 40090))
+# View(clean_vars[el_stop_id == 40090])
+
+
+message("clean_vars")
+str(clean_vars)
+
+message("el_stns_full_dates_within_pt5")
+str(el_stns_full_dates_within_pt5)
+
+
+rm(el_stns_full_dates_within_pt5, the_merge)
+
+```
+  
+
+### Add in the general daily data (not by specific Divvy station) - i.e., the Divvy rides data for each day
+```{r}
+
+# View(clean_vars[el_stop_id == 40090])
+# 
+# str(divvy_trips_by_day)
+# View(divvy_trips_by_day)
+
+
+## initial merge
+base_merge <-
+  merge(x = clean_vars,
+        y = divvy_trips_by_day,
+        by.x = c("el_date"),
+        by.y = c("start_date"),
+        all.x = TRUE
+        )
+
+rm(clean_vars)
+
+
+## change NA to zero
+new_vars <-
+  base_merge[ ,
+             `:=` (divvy_all_trip_cnt_cus =
+                     if_else(is.na(Customer_trip_cnt__day),
+                             as.numeric(0),
+                             Customer_trip_cnt__day
+                             ),
+                   divvy_all_triptime_mean_cus =
+                     if_else(is.na(Customer_trip_duration_mean__day),
+                             as.numeric(0),
+                             Customer_trip_duration_mean__day
+                             ),
+                   divvy_all_triptime_med_cus =
+                     if_else(is.na(Customer_trip_duration_med__day),
+                             as.numeric(0),
+                             Customer_trip_duration_med__day
+                             ),
+                   divvy_all_trip_cnt_dep =
+                     if_else(is.na(Dependent_trip_cnt__day),
+                             as.numeric(0),
+                             Dependent_trip_cnt__day
+                             ),
+                   divvy_all_triptime_mean_dep =
+                     if_else(is.na(Dependent_trip_duration_mean__day),
+                             as.numeric(0),
+                             Dependent_trip_duration_mean__day
+                             ),
+                   divvy_all_triptime_med_dep =
+                     if_else(is.na(Dependent_trip_duration_med__day),
+                             as.numeric(0),
+                             Dependent_trip_duration_med__day
+                             ),
+                   divvy_all_trip_cnt_sub =
+                     if_else(is.na(Subscriber_trip_cnt__day),
+                             as.numeric(0),
+                             Subscriber_trip_cnt__day
+                             ),
+                   divvy_all_triptime_mean_sub =
+                     if_else(is.na(Subscriber_trip_duration_mean__day),
+                             as.numeric(0),
+                             Subscriber_trip_duration_mean__day
+                             ),
+                   divvy_all_triptime_med_sub =
+                     if_else(is.na(Subscriber_trip_duration_med__day),
+                             as.numeric(0),
+                             Subscriber_trip_duration_med__day
+                             )
+                   )
+             ]
+
+rm(base_merge)
+# str(new_vars)
+
+
+## remove no-longer-needed variables
+add_daily_data <-
+  new_vars[ ,
+           c("Customer_trip_cnt__day",
+             "Customer_trip_duration_mean__day",
+             "Customer_trip_duration_med__day",
+             "Dependent_trip_cnt__day",
+             "Dependent_trip_duration_mean__day",
+             "Dependent_trip_duration_med__day",
+             "Subscriber_trip_cnt__day",
+             "Subscriber_trip_duration_mean__day",
+             "Subscriber_trip_duration_med__day"
+             ) := NULL] %>% 
+  setkey(el_date,
+         el_stop_id
+         )
+
+str(add_daily_data)
+# View(add_daily_data[el_stop_id == 40090])
+# View(divvy_trips_by_day)
+
+
+rm(new_vars)
+
+```
+
+
+### Add data on trip counts and trip times for the closest Divvy station to each El station (on each day)  
+  
+  First merge daily data and data on the closest divvy stations.
+```{r}
+
+# str(el_stns_full_dates_miles_to_closest_divvy)
+# View(el_stns_full_dates_miles_to_closest_divvy[el_stop_id == 40090])
+# 
+# str(divvy_trips_by_day_from)
+# View(divvy_trips_by_day_from[from_station_id == 242])
+
+
+merge_in_closest_divvy_stn <-
+  merge(x = add_daily_data,
+        y = el_stns_full_dates_miles_to_closest_divvy,
+        by.x = c("el_date", "el_stop_id"),
+        by.y = c("el_date", "el_stop_id"),
+        all.x = TRUE
+        )
+
+message("add_daily_data")
+str(add_daily_data)
+
+message("merge_in_closest_divvy_stn")
+str(merge_in_closest_divvy_stn)
+
+
+rm(add_daily_data)
+
+```
+  
+    
+  Next merge in the data on Divvy stats by day and by Divvy station.
+```{r}
+
+# str(divvy_trips_by_day_from)
+
+el_stns_full_dates_daily_stats_all <-
+  merge(x = merge_in_closest_divvy_stn,
+        y = divvy_trips_by_day_from,
+        by.x = c("el_date", "divvy_station_id"),
+        by.y = c("start_date", "from_station_id"),
+        all.x = TRUE
+        ) %>% 
+  # rename the variables for consistency
+  rename(divvy_mindist_miles = min_dist_miles,
+         divvy_mindist_trip_cnt_cus = Customer_trip_cnt__dayfrom,
+         divvy_mindist_triptime_sum_cus = Customer_trip_duration_sum__dayfrom,
+         divvy_mindist_trip_cnt_dep = Dependent_trip_cnt__dayfrom,
+         divvy_mindist_triptime_sum_dep = Dependent_trip_duration_sum__dayfrom,
+         divvy_mindist_trip_cnt_sub = Subscriber_trip_cnt__dayfrom,
+         divvy_mindist_triptime_sum_sub = Subscriber_trip_duration_sum__dayfrom
+         ) %>% 
+  mutate(divvy_mindist_trip_cnt_cus =
+           if_else(is.na(divvy_mindist_trip_cnt_cus),
+                   as.numeric(0),
+                   divvy_mindist_trip_cnt_cus
+                   ),
+         divvy_mindist_triptime_mean_cus =
+           if_else(is.na(divvy_mindist_triptime_sum_cus / divvy_mindist_trip_cnt_cus),
+                   as.numeric(0),
+                   divvy_mindist_triptime_sum_cus / divvy_mindist_trip_cnt_cus
+                   ),
+         divvy_mindist_trip_cnt_dep =
+           if_else(is.na(divvy_mindist_trip_cnt_dep),
+                   as.numeric(0),
+                   divvy_mindist_trip_cnt_dep
+                   ),
+         divvy_mindist_triptime_mean_dep =
+           if_else(is.na(divvy_mindist_triptime_sum_dep / divvy_mindist_trip_cnt_dep),
+                   as.numeric(0),
+                   divvy_mindist_triptime_sum_dep / divvy_mindist_trip_cnt_dep
+                   ),
+         divvy_mindist_trip_cnt_sub =
+           if_else(is.na(divvy_mindist_trip_cnt_sub),
+                   as.numeric(0),
+                   divvy_mindist_trip_cnt_sub
+                   ),
+         divvy_mindist_triptime_mean_sub =
+           if_else(is.na(divvy_mindist_triptime_sum_sub / divvy_mindist_trip_cnt_sub),
+                   as.numeric(0),
+                   divvy_mindist_triptime_sum_sub / divvy_mindist_trip_cnt_sub
+                   )
+         ) %>% 
+  select(-divvy_mindist_triptime_sum_cus,
+         -divvy_mindist_triptime_sum_dep,
+         -divvy_mindist_triptime_sum_sub,
+         -divvy_station_id
+         ) %>% 
+  as.data.table() %>% 
+  setkey(el_date,
+         el_stop_id
+         )
+
+
+message("merge_in_closest_divvy_stn")
+str(merge_in_closest_divvy_stn)
+
+message("el_stns_full_dates_daily_stats_all")
+str(el_stns_full_dates_daily_stats_all)
+
+# View(el_stns_full_dates_daily_stats_all[el_stop_id == 40090])
+
+rm(merge_in_closest_divvy_stn, el_stns_full_dates_miles_to_closest_divvy)
+
+
+## Save the data to the proper folder
+saveRDS(el_stns_full_dates_daily_stats_all,
+        paste0(wd,
+               "/Data/Interim/",
+               "el_stns_full_dates_daily_stats_all.Rds"
+               )
+        )
+
+```
+
+
+## Create the full dataset by merging in the additional data  
+    
+  Merge in data on el rides.
+```{r}
+
+message("el_stns_full_dates_daily_stats_all")
+str(el_stns_full_dates_daily_stats_all)
+
+message("rds_files$data_el_format_vars.Rds")
+str(rds_files$data_el_format_vars.Rds)
+
+
+## Quick plot inspection
+freqently_used_el <-
+  rds_files$data_el_format_vars.Rds %>% 
+  top_n(n = 1, w = rides) %>% 
+  pull(station_id)
+  
+
+rds_files$data_el_format_vars.Rds[station_id == freqently_used_el &
+                                    date >= as_date("2013-07-01")
+                                  ] %>% 
+  ggplot(aes(x = date,
+             y = rides
+             )
+         ) +
+  geom_line()
+  
+
+## The merge
+add_el_rides <-
+  merge(x = el_stns_full_dates_daily_stats_all,
+        y = rds_files$data_el_format_vars.Rds,
+        by.x = c("el_date", "el_stop_id"),
+        by.y = c("date", "station_id"),
+        all.x = TRUE
+        ) %>% 
+  rename(el_rides = rides) %>% 
+  select(-daytype,
+         -stationname
+         )
+
+message("el_stns_full_dates_daily_stats_all")
+dim(el_stns_full_dates_daily_stats_all)
+
+message("add_el_rides")
+dim(add_el_rides)
+str(add_el_rides)
+
+
+rm(freqently_used_el, el_stns_full_dates_daily_stats_all)
+
+```
+  
+    
+  Merge in data on holidays.
+```{r}
+
+message("rds_files$data_holidays_format_vars.Rds")
+str(rds_files$data_holidays_format_vars.Rds)
+
+
+## rds_files$data_holidays_format_vars.Rds has one duplicate date, so remove that first
+dupe_dates <-
+  rds_files$data_holidays_format_vars.Rds %>% 
+  count(date) %>% 
+  arrange(desc(n)) %>% 
+  filter(n != 1) %>% 
+  pull(date)
+
+remove_dupe <-
+  rds_files$data_holidays_format_vars.Rds %>% 
+  filter(date == as_date(dupe_dates)
+         ) %>% 
+  rowid_to_column() %>% 
+  filter(rowid != 1) %>% 
+  mutate(filter_temp = paste(date,
+                             holiday_name,
+                             holiday_comment,
+                             sep = "_"
+                             )
+         )
+
+holiday_dedupe <-
+  rds_files$data_holidays_format_vars.Rds %>% 
+  mutate(filter_temp = paste(date,
+                             holiday_name,
+                             holiday_comment,
+                             sep = "_"
+                             )
+         ) %>% 
+  filter(filter_temp != remove_dupe$filter_temp) %>% 
+  select(-filter_temp)
+
+message("holiday_dedupe")
+str(holiday_dedupe)
+
+
+## merge itself
+base <-
+  merge(x = add_el_rides,
+        y = holiday_dedupe,
+        by.x = "el_date",
+        by.y = "date",
+        all.x = TRUE
+        )
+
+
+## add 1/0 holiday indicator
+add_holidays <-
+  base[ , holiday := if_else(is.na(holiday_name), FALSE, TRUE)]
+
+
+message("add_el_rides")
+dim(add_el_rides)
+
+message("add_holidays")
+dim(add_holidays)
+str(add_holidays)
+
+
+rm(dupe_dates, remove_dupe, base, holiday_dedupe, add_el_rides)
+
+```
+  
+    
+  Merge in data on weather.
+```{r}
+
+message("rds_files$data_weather_format_vars.Rds")
+str(rds_files$data_weather_format_vars.Rds)
+
+
+## The merge
+add_weather <-
+  merge(x = add_holidays,
+        y = rds_files$data_weather_format_vars.Rds,
+        by.x = "el_date",
+        by.y = "date",
+        all.x = TRUE
+        ) %>% 
+  select(-station,
+         -latitude,
+         -longitude,
+         -elevation,
+         -name
+         ) %>% 
+  setkey(el_date,
+         el_stop_id
+         )
+
+
+message("add_holidays")
+dim(add_holidays)
+
+message("add_weather")
+dim(add_weather)
+str(add_weather)
+
+
+rm(add_holidays)
+rm(distance_el_divvy_stations_dt, divvy_trips_by_day, divvy_trips_by_day_from)
+# rm(rds_files)
+
+```
+  
+    
+  Create time-based variables, and add them in.  
+    
+  Here I use `timetk::tk_augment_timeseries_signature` to create the "time variables" (e.g., month, week, etc.), and I turn integer variables into factors to facilitate modeling later on.
+```{r}
+
+date_min <- min(add_weather$el_date)
+date_max <- max(add_weather$el_date)
+
+dates_dt <- 
+  data.frame(base_date = as_date(date_min:date_max)
+             ) %>%  
+  tk_augment_timeseries_signature() %>% 
+  select(-diff,
+         -index.num,
+         -year.iso,
+         -month.xts,
+         -month.lbl,
+         -hour,
+         -minute,
+         -second,
+         -hour12,
+         -am.pm,
+         -wday,
+         -wday.xts,
+         -mday,
+         -qday,
+         -yday,
+         -week2,
+         -week3,
+         -week4,
+         -mday7,
+         -week,
+         -week.iso
+         ) %>% 
+  mutate_if(is.integer, factor) %>% 
+  as.data.table() %>% 
+  setkey(base_date)
+  
+
+str(dates_dt)
+
+
+rm(date_min, date_max)
+
+```
+  
+    
+  Then I simply merge the datasets.
+```{r}
+
+add_time <-
+  merge(x = add_weather,
+        y = dates_dt,
+        by.x = "el_date",
+        by.y = "base_date",
+        all.x = TRUE
+        ) %>% 
+  setkey(el_stop_id,
+         el_date)
+
+dim(add_weather)
+dim(add_time)
+
+str(add_time)
+
+
+rm(add_weather, dates_dt)
+
+```
+
+
+## Inspect Missing Values
+```{r}
+
+summary(add_time)
+miss_var_summary(add_time)
+# View(miss_var_summary(add_time))
+
+```
+
+
+### El Rides  
+  
+  I believe `NA` values for `el_rides` are for dates when a particular station was out of service (e.g., a station was out of service for a period of time, or only came into existence after a certain date). For modeling, I therefore limit the dataset to only those instances where `el_rides` is greater than zero. **NOTE:** For time series methods requiring equal spaced events, this "could" present an issue.  
+    
+  Showing an example of missing `el_rides` values
+```{r}
+
+el_stop_na <-
+  add_time %>% 
+  filter(is.na(el_rides)
+         ) %>% 
+  select(el_stop_id) %>% 
+  arrange(el_stop_id) %>% 
+  distinct() %>% 
+  top_n(n = 2, wt = el_stop_id) %>% 
+  pull(el_stop_id)
+
+
+# View(
+  add_time %>% 
+    filter(el_stop_id %in% el_stop_na) %>% 
+    select(el_stop_id,
+           el_date,
+           el_rides
+           ) %>% 
+    arrange(el_stop_id,
+            el_date
+            ) %>% 
+    split(.$el_stop_id) %>% 
+    map(~ head(.x, 100)
+        )
+  # )
+
+rm(el_stop_na)
+
+```
+  
+    
+  Filter the data for `el_rides` greater than zero.
+```{r}
+
+el_rides_nozero_noNA <-
+  add_time %>% 
+  filter(el_rides >= 0)
+
+
+message("rows removed")
+nrow(add_time) - nrow(el_rides_nozero_noNA)
+
+
+message("el_rides_nozero_noNA")
+str(el_rides_nozero_noNA)
+summary(el_rides_nozero_noNA)
+
+miss_var_summary(el_rides_nozero_noNA)
+# View(miss_var_summary(el_rides_nozero_noNA))
+
+
+rm(add_time)
+
+```
+
+
+### Weather Data  
+  
+  Data were included for `el_rides` for dates up to, and including, 2018-01-01, but the Weather data stops at 2017-12-31. So I can simply remove data after 2017-12-31 (which removes the bulk of the NA Weather data).
+```{r}
+
+el_dates_no_weather <-
+  el_rides_nozero_noNA %>% 
+  filter(is.na(prcp)
+         ) %>% 
+  select(el_date) %>% 
+  distinct() %>% 
+  pull(el_date)
+
+
+weather_20171231 <-
+  el_rides_nozero_noNA %>% 
+  filter(el_date < as_date(el_dates_no_weather)
+         )
+
+
+message("rows removed")
+nrow(el_rides_nozero_noNA) - nrow(weather_20171231)
+
+message("weather_20171231")
+# str(weather_20171231)
+# summary(weather_20171231)
+
+miss_var_summary(weather_20171231)
+# View(miss_var_summary(weather_20171231))
+
+
+rm(el_dates_no_weather, el_rides_nozero_noNA)
+
+```
+  
+    
+  As `snwd` and `snow` appear to be sporadically (and rarely) missing (equipment failure?), here I simply fill in the `NA` values with the value from the previous day.
+```{r}
+
+weather_20171231 %>% 
+  filter(is.na(snwd) | is.na(snow)
+         ) %>% 
+  select(el_date, snwd, snow) %>% 
+  distinct()
+
+
+data_no_missing <-
+  weather_20171231 %>% 
+  mutate(snwd = na.locf(snwd),
+         snow = na.locf(snow)
+         ) %>% 
+  as.data.table() %>% 
+  setkey(el_date,
+         el_stop_id
+         )
+
+
+message("data_no_missing")
+str(data_no_missing)
+summary(data_no_missing)
+
+miss_var_summary(data_no_missing)
+View(miss_var_summary(data_no_missing))
+
+
+## Save the  data to the proper folder
+saveRDS(data_no_missing,
+        paste0(wd,
+               "/Data/Interim/",
+               "data_no_missing.Rds"
+               )
+        )
+
+
+rm(weather_20171231)
+
+```
+  
+    
+  **To be deleted later (below)**  
+    
+  Just reloading data to save some time.
+```{r}
+
+# data_no_missing <-
+#   readRDS(paste0(wd,
+#                  "/Data/Interim/",
+#                  "data_no_missing.Rds"
+#                  )
+#           )
+# 
+# str(data_no_missing)
+
+```
+  
+    
+  **To be deleted later (above)**  
+
+
+## Feature Engineering
+
+### Weather Variables
+  
+  As the prediction forcast is 14 days in the future, I don't think we'll be able to accuratley know the temperature variables `tmin` and `tmax` within one degree of accuracy. So here, I simply test if knowing within `X` degrees of accuracy is viable.  
+    
+  Visually, it looks like 25 degrees may be a good range (this is a lot wider than I epected!).
+```{r}
+
+func_temp_linegraph <-
+  function(date_1, date_2) {
+    data_no_missing %>% 
+      select(el_date,
+             tmin,
+             tmax
+             ) %>% 
+      distinct() %>% 
+      mutate(wk_start = floor_date(x = el_date,
+                                   unit = "week"#,
+                                   # week_start = getOption("lubridate.week.start", 7)
+                                   )
+             ) %>% 
+      filter(dplyr::between(wk_start,
+                            as_date(date_1),
+                            as_date(date_2)
+                            )
+             ) %>% 
+      gather(key = temp_type,
+             value = degrees_f,
+             tmin:tmax
+             ) %>% 
+      ggplot(aes(x = el_date,
+                 y = degrees_f,
+                 color = temp_type
+                 )
+             ) +
+      geom_line() +
+      facet_wrap(~ wk_start,
+                 scales = "free",
+                 ncol = 4
+                 ) +
+      theme_minimal() +
+      NULL
+  }
+
+func_temp_linegraph(date_1 = "2013-06-30", date_2 = "2013-09-30")
+func_temp_linegraph(date_1 = "2013-09-30", date_2 = "2013-12-31")
+func_temp_linegraph(date_1 = "2013-12-31", date_2 = "2014-03-30")
+func_temp_linegraph(date_1 = "2014-04-30", date_2 = "2014-06-30")
+func_temp_linegraph(date_1 = "2014-06-30", date_2 = "2014-09-30")
+
+
+rm(func_temp_linegraph)
+
+```
+  
+    
+  Formally testing accuracy for rounding to nearest 10 degrees with a lag of 7 days.
+```{r}
+
+min(data_no_missing$tmin)
+max(data_no_missing$tmin)
+min(data_no_missing$tmax)
+max(data_no_missing$tmax)
+
+
+temp_round <-
+  data_no_missing %>% 
+  select(el_date,
+         tmin,
+         tmax
+         ) %>% 
+  distinct() %>% 
+  mutate(#tmin_rnd10 = floor(tmin / 10) * 10,
+         #tmax_rnd10 = floor(tmax / 10) * 10,
+         tmin_rnd10 = round(tmin, -1),
+         tmax_rnd10 = round(tmax, -1),
+         tmin_rnd10_l7 = dplyr::lag(x = tmin_rnd10, n = 7),
+         tmax_rnd10_l7 = dplyr::lag(x = tmax_rnd10, n = 7)
+         ) %>% 
+  mutate_at(vars(tmin_rnd10:tmax_rnd10_l7), factor)
+
+message("temp_round")
+str(temp_round)
+# View(temp_round)
+
+
+message("tmin accuracy round")
+temp_round %>% 
+  select(tmin_rnd10,
+         tmin_rnd10_l7
+         ) %>% 
+  filter(!is.na(tmin_rnd10_l7)) %>% 
+  rename(obs = tmin_rnd10,
+         pred = tmin_rnd10_l7
+         ) %>% 
+  multiClassSummary(lev = levels(temp_round$tmin_rnd10)
+                    )
+
+
+message("tmax accuracy round")
+temp_round %>% 
+  select(tmax_rnd10,
+         tmax_rnd10_l7
+         ) %>% 
+  filter(!is.na(tmax_rnd10_l7)) %>% 
+  rename(obs = tmax_rnd10,
+         pred = tmax_rnd10_l7
+         ) %>% 
+  multiClassSummary(lev = levels(temp_round$tmax_rnd10)
+                    )
+
+```
+  
+    
+  Formally testing accuracy for a band of 25 degrees with a lag of 7 days.
+```{r}
+
+temp_bands <-
+  data_no_missing %>% 
+  select(el_date,
+         tmin,
+         tmax
+         ) %>% 
+  distinct() %>% 
+  mutate(tmin_bands = case_when(tmin < -25 ~ "01_blw_-25",
+                                -25 <= tmin & tmin < 0 ~ "02_-25to00",
+                                0 <= tmin & tmin < 25 ~ "03_00to25",
+                                25 <= tmin & tmin < 50 ~ "04_25to50",
+                                50 <= tmin & tmin < 75 ~ "05_50to75",
+                                75 <= tmin & tmin < 100 ~ "06_75to100",
+                                100 <= tmin ~ "07_abv_100"
+                                ) %>% as.factor(),
+         tmax_bands = case_when(tmax < 0 ~ "01_blw_00",
+                                0 <= tmax & tmax < 25 ~ "02_00to25",
+                                25 <= tmax & tmax < 50 ~ "03_25to50",
+                                50 <= tmax & tmax < 75 ~ "04_50to75",
+                                75 <= tmax & tmax < 100 ~ "05_75to100",
+                                100 <= tmax ~ "06_abv_100"
+                                ) %>% as.factor(),
+         tmin_bands_l7 = dplyr::lag(tmin_bands, n = 7),
+         tmax_bands_l7 = dplyr::lag(tmax_bands, n = 7)
+         )
+
+message("temp_bands")
+str(temp_bands)
+# View(temp_bands)
+
+
+message("tmin accuracy bands")
+temp_bands %>% 
+  select(tmin_bands,
+         tmin_bands_l7
+         ) %>% 
+  filter(!is.na(tmin_bands_l7)) %>% 
+  rename(obs = tmin_bands,
+         pred = tmin_bands_l7
+         ) %>% 
+  multiClassSummary(lev = levels(temp_bands$tmin_bands)
+                    )
+
+
+message("tmax accuracy bands")
+temp_bands %>% 
+  select(tmax_bands,
+         tmax_bands_l7
+         ) %>% 
+  filter(!is.na(tmax_bands_l7)) %>% 
+  rename(obs = tmax_bands,
+         pred = tmax_bands_l7
+         ) %>% 
+  multiClassSummary(lev = levels(temp_bands$tmax_bands)
+                    )
+
+```
+  
+    
+  As the 25 degree band does appear more accurate (although less accurate than expected), here I merely formalize the inclusion of the temperature bands.
+```{r}
+
+# create bands of temp
+temp_bands_25F <-
+  data_no_missing[ ,
+                  `:=` (tmin_bands = case_when(tmin < -25 ~ "01_blw_-25",
+                                               -25 <= tmin & tmin < 0 ~ "02_-25to00",
+                                               0 <= tmin & tmin < 25 ~ "03_00to25",
+                                               25 <= tmin & tmin < 50 ~ "04_25to50",
+                                               50 <= tmin & tmin < 75 ~ "05_50to75",
+                                               75 <= tmin & tmin < 100 ~ "06_75to100",
+                                               100 <= tmin ~ "07_abv_100"
+                                               ) %>% 
+                          as.factor(),
+                        tmax_bands = case_when(tmax < 0 ~ "01_blw_00",
+                                               0 <= tmax & tmax < 25 ~ "02_00to25",
+                                               25 <= tmax & tmax < 50 ~ "03_25to50",
+                                               50 <= tmax & tmax < 75 ~ "04_50to75",
+                                               75 <= tmax & tmax < 100 ~ "05_75to100",
+                                               100 <= tmax ~ "06_abv_100"
+                                               ) %>% 
+                          as.factor()
+                        )
+                  ]
+
+# create lags at 7 days
+temp_bands_25F <-
+  temp_bands_25F[ ,
+                 `:=` (tmin_bands_l7 = dplyr::lag(tmin_bands, n = 7),
+                       tmax_bands_l7 = dplyr::lag(tmax_bands, n = 7)
+                       )
+                 ]
+
+# remove no-longer-needed vars
+temp_bands_25F <-
+  temp_bands_25F[ ,
+                 c("tmin", "tmax", "tobs") := NULL
+                 ]
+
+
+str(temp_bands_25F)
+
+
+rm(data_no_missing, temp_bands, temp_round)
+
+```
+  
+    
+  Visually, investigating precipitation-related variables (`prcp`, `snow`, and `snwd`).
+```{r}
+
+func_prcp_linegraph <-
+  function(date_1, date_2) {
+    temp_bands_25F %>% 
+      select(el_date,
+             snwd,
+             snow,
+             prcp
+             ) %>% 
+      distinct() %>% 
+      mutate(wk_start = floor_date(x = el_date,
+                                   unit = "week"
+                                   )
+             ) %>% 
+      filter(dplyr::between(wk_start,
+                            as_date(date_1),
+                            as_date(date_2)
+                            )
+             ) %>% 
+      gather(key = metric,
+             value = value,
+             snwd:prcp
+             ) %>% 
+      ggplot(aes(x = el_date,
+                 y = value,
+                 color = metric
+                 )
+             ) +
+      geom_line() +
+      # coord_flip() +
+      facet_wrap(vars(metric, wk_start),
+                 scales = "free",
+                 ncol = 4#,
+                 # labeller = "label_both"
+                 ) +
+      theme_minimal() +
+      theme(legend.position = "none") +
+      NULL
+    }
+
+
+func_prcp_linegraph(date_1 = "2015-02-01", date_2 = "2015-02-28")
+func_prcp_linegraph(date_1 = "2015-04-01", date_2 = "2015-04-30")
+func_prcp_linegraph(date_1 = "2015-06-01", date_2 = "2015-06-30")
+func_prcp_linegraph(date_1 = "2015-08-01", date_2 = "2015-08-31")
+func_prcp_linegraph(date_1 = "2015-10-01", date_2 = "2015-10-31")
+func_prcp_linegraph(date_1 = "2015-12-01", date_2 = "2015-12-31")
+
+
+rm(func_prcp_linegraph)
+
+```
+  
+    
+  The precipitation variables very likely do have predictive power, but being able to accurately predict them 7 days in advance is difficult. As there doesn't appear to be any easily/quickly identifiable pattern to produce seven-day-forward estimates for these variables, I merely delete them.
+```{r}
+
+remove_prcp_vars <-
+  temp_bands_25F[ ,
+             c("prcp", "snow", "snwd") := NULL
+             ]
+
+str(remove_prcp_vars)
+
+
+rm(temp_bands_25F)
+
+```
+
+
+### Divvy Data  
+  
+  Here I simply utilize the values of the divvy data lagged at 7 days. As with the weather data, this is used to get the general movement in the data, and to make prediction of divvy data (at 7 days in the future) easier.
+```{r}
+
+divvy_vars_lag7 <-
+  remove_prcp_vars %>% 
+  select(matches("_cus$|_dep$|sub$")
+         ) %>% 
+  mutate_all(funs(l7 = dplyr::lag(., n = 7)
+                  )
+             ) %>% 
+  select(matches("_l7"))
+
+# str(divvy_vars_lag7)
+# View(divvy_vars_lag7 %>% head(1000))
+
+
+
+add_divvy_vars_lag7 <-
+  remove_prcp_vars %>% 
+  select(-matches("_cus$|_dep$|sub$")
+         ) %>% 
+  bind_cols(divvy_vars_lag7)
+
+dim(remove_prcp_vars)
+dim(add_divvy_vars_lag7)
+
+str(add_divvy_vars_lag7)
+View(add_divvy_vars_lag7 %>% head(1000))
+
+
+## Save the data to the proper folder
+saveRDS(add_divvy_vars_lag7,
+        paste0(wd,
+               "/Data/Interim/",
+               "add_divvy_vars_lag7.Rds"
+               )
+        )
+
+
+rm(divvy_vars_lag7, remove_prcp_vars)
+
+```
+
+
+```{r}
+
+# add_divvy_vars_lag7 <-
+#   readRDS(paste0(wd,
+#                  "/Data/Interim/",
+#                  "add_divvy_vars_lag7.Rds"
+#                  )
+#           )
+# 
+# 
+# str(add_divvy_vars_lag7)
+
+```
+
+
+### Holidays  
+  
+  sdf
+```{r}
+
+
 
 ```
 
 
 
+
+## Modeling
+
+### Model Prep  
+  
+  I'll be testing models that use the entire dataset, and also models that are specific to each `el_stop_id` (i.e., a model for each El entry point). Therefore, I'll create train-test splits (at 70% of the data) for each group.
+```{r}
+
+func_train_test_indicator <-
+  function(data, date_var, train_val_pct, train_pct, new_col_suffix) {
+    # get needed variables
+    date_var_enquo = enquo(date_var)
+    
+    date_min = data %>% 
+      select(!!date_var_enquo) %>% 
+      distinct() %>% 
+      top_n(n = -1, wt = !!date_var_enquo) %>% 
+      pull(!!date_var_enquo)
+    
+    date_max = data %>% 
+      select(!!date_var_enquo) %>% 
+      distinct() %>% 
+      top_n(n = 1, wt = !!date_var_enquo) %>% 
+      pull(!!date_var_enquo)
+    
+    # train and validation split
+    days_trainval = round(train_val_pct * (date_max - date_min))
+    split_date_trainval = date_min + days_trainval
+
+    # train split
+    days_train = round(train_pct * (split_date_trainval - date_min))
+    split_date_train = date_min + days_train
+
+    # new dataset
+    new_data =
+      data %>%
+      mutate(new_var =
+               case_when(el_date < split_date_train ~ "01_train",
+                         between(x = el_date,
+                                 lower = split_date_train,
+                                 upper = split_date_trainval,
+                                 incbounds = TRUE
+                                 ) ~ "02_validation",
+                         TRUE ~ "03_test"
+                         )
+             )
+
+    colnames(new_data)[length(new_data)] = paste0("data_use_", new_col_suffix)
+    
+    return(new_data)
+  }
+
+
+test <-
+  func_train_test_indicator(data = data_no_missing,
+                            date_var = el_date,
+                            train_val_pct = 0.8,
+                            train_pct = 0.7,
+                            new_col_suffix = "all"
+                            )
+
+colnames(data_no_missing) %>% tail(5)
+colnames(test) %>% tail(5)
+str(test)
+test %>% 
+  group_by(data_use_all_data) %>% 
+  summarise(min_el_date = min(el_date),
+            max_el_date = max(el_date)
+            )
+
+test_group <-
+  test %>% 
+  split(.$el_stop_id) %>% 
+  map(~ func_train_test_indicator(data = .x,
+                            date_var = el_date,
+                            train_val_pct = 0.8,
+                            train_pct = 0.7,
+                            new_col_suffix = "el_stop_id"
+                            )
+      ) %>% 
+  bind_rows()
+
+str(test_group)
+
+View(test_group %>% select(el_date, el_stop_id, data_use_all, data_use_el_stop_id) %>% head(5000))
+
+View(
+  test_group %>% 
+  group_by(el_stop_id, data_use_all) %>% 
+  summarise(ed_min_a = min(el_date),
+            ed_max_a = max(el_date)
+            ) %>% 
+    left_join(y = test_group %>% 
+                group_by(el_stop_id, data_use_el_stop_id) %>% 
+                summarise(ed_min_s = min(el_date),
+                          ed_max_s = max(el_date)
+                          ),
+              by = c("el_stop_id" = "el_stop_id",
+                     "data_use_all" = "data_use_el_stop_id"
+                     )
+              ) %>% 
+    mutate(match_min = if_else(ed_min_a == ed_min_s, TRUE, FALSE),
+           match_max = if_else(ed_max_a == ed_max_s, TRUE, FALSE)
+           ) %>% 
+    filter(match_min == FALSE | match_max == FALSE)
+)
+
+
+View(test_group %>% 
+       select(el_stop_id, el_date, el_rides, data_use_all, data_use_el_stop_id) %>%
+       filter(el_stop_id %in% c(41690, 41700)
+              )
+     )
+
+
+View(
+test_group %>% 
+  count(el_stop_id, data_use_all) %>% 
+  rename(n_a = n) %>% 
+  left_join(y = test_group %>% 
+              count(el_stop_id, data_use_el_stop_id) %>% 
+              rename(n_es = n),
+            by = c("el_stop_id" = "el_stop_id", 
+                   "data_use_all" = "data_use_el_stop_id"
+                   )
+            ) %>% 
+  mutate(match = if_else(n_a == n_es, TRUE, FALSE)) %>% 
+  filter(match == FALSE)
+)
+
+test_group %>% 
+  count(data_use_all)
+
+test_group %>% 
+  count(data_use_el_stop_id)
+
+
+
+
+
+
+min_train <- min(all_data_datesformatted_list$train$train_date)
+max_train <- max(all_data_datesformatted_list$train$train_date)
+
+min_test <- min(all_data_datesformatted_list$test$test_date)
+max_test <- max(all_data_datesformatted_list$test$test_date)
+
+pt7_train_days <- round(0.7 * (max_train - min_train))
+train_split_point <- min_train + pt7_train_days
+
+
+dates_dt <- 
+  as.data.table(x = as_date(min_train:max_test)
+                ) %>%  
+  tk_augment_timeseries_signature()
+  
+
+colnames(dates_dt)[1] <- "date_"
+
+
+dates_dt <- dates_dt %>% 
+  mutate(yrmth = floor_date(date_, unit = "month"),
+         dataset_purpose = case_when(date_ < train_split_point ~ "train",
+                                     between(x = date_,
+                                             lower = train_split_point,
+                                             upper = max_train,
+                                             incbounds = TRUE
+                                             ) ~ "validation",
+                                     TRUE ~ "test"
+                                     )
+         ) %>% 
+  mutate_if(is.character, as.factor) %>% 
+
+rm(pt7_train_days)
+
+```
+
+
+  Loading the final dataset again.
+```{r}
+
+##  THINK ABOUT:
+
+  ## Lagging all divvy data by 21 days (including all "date"-related variables)
+
+  ## Removing data on `prcp` & `snow` (as we won't know that accurately in advance)
+  ## Modifying `tmax` & `tmin` to 10 degree F increments (as we're more likely to know that in advance than specific temperature readings)
+
+
+data_no_missing <-
+  readRDS(paste0(wd,
+                 "/Data/Interim/",
+                 "data_no_missing.Rds"
+                 )
+          )
+
+
+str(data_no_missing)
+
+```
+
+
+
+```{r}
+
+
+
+## Quick plot inspection
+common_el_stop <-
+  add_weather %>% 
+  group_by(el_stop_id) %>% 
+  summarise(rides_tot = sum(el_rides)
+            ) %>% 
+  top_n(n = 1, wt = rides_tot) %>% 
+  pull(el_stop_id)
+
+add_weather %>% 
+  filter(el_stop_id == common_el_stop) %>% 
+  ggplot(aes(x = el_date,
+             y = el_rides
+             )
+         ) +
+  geom_line()
+
+rm(common_el_stop)
+
+
+```
+
+
+## Just inspecting the data to this point
+```{r}
+
+# message("distance_el_divvy_stations_dt")
+# str(distance_el_divvy_stations_dt)
+# 
+# message("divvy_trips_by_day")
+# str(divvy_trips_by_day)
+# 
+# message("divvy_trips_by_day_from")
+# str(divvy_trips_by_day_from)
+
+message("el_stns_full_dates_daily_stats_all")
+str(el_stns_full_dates_daily_stats_all)
+
+
+pmap(.l = list(a = names(rds_files),
+               b = rds_files
+               ),
+     .f = function(a, b) {
+       message(a)
+       
+       str(b)
+       }
+     )
+
+```
 
 
 
