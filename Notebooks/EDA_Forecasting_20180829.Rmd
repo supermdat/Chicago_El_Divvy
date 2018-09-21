@@ -1538,7 +1538,7 @@ str(data_no_missing)
 summary(data_no_missing)
 
 miss_var_summary(data_no_missing)
-View(miss_var_summary(data_no_missing))
+# View(miss_var_summary(data_no_missing))
 
 
 ## Save the  data to the proper folder
@@ -1553,26 +1553,6 @@ saveRDS(data_no_missing,
 rm(weather_20171231)
 
 ```
-  
-    
-  **To be deleted later (below)**  
-    
-  Just reloading data to save some time.
-```{r}
-
-# data_no_missing <-
-#   readRDS(paste0(wd,
-#                  "/Data/Interim/",
-#                  "data_no_missing.Rds"
-#                  )
-#           )
-# 
-# str(data_no_missing)
-
-```
-  
-    
-  **To be deleted later (above)**  
 
 
 ## Feature Engineering
@@ -1865,6 +1845,16 @@ remove_prcp_vars <-
              c("prcp", "snow", "snwd") := NULL
              ]
 
+
+## Save the data to the proper folder
+saveRDS(remove_prcp_vars,
+        paste0(wd,
+               "/Data/Interim/",
+               "remove_prcp_vars.Rds"
+               )
+        )
+
+
 str(remove_prcp_vars)
 
 
@@ -1875,73 +1865,316 @@ rm(temp_bands_25F)
 
 ### Divvy Data  
   
-  Here I simply utilize the values of the divvy data lagged at 7 days. As with the weather data, this is used to get the general movement in the data, and to make prediction of divvy data (at 7 days in the future) easier.
+  As the desire is to predict `el_rides` for each level of `el_stop_id` for 7 days in the future. As a proof of concept, the remainder of the analyses will be done for 6 values of `el_stop_id`: the two most frequently used el stations (by el ridership), the two least frquently used el stations, and two el stations in the middle. This is necessary to do **before** feature engineering the divvy data, as the divvy data are specific to each value of `el_stop_id`.
+    
+  First, I just create a datset ranking `el_stop_id` by total el rides.
 ```{r}
 
+el_stop_id_rank <-
+  remove_prcp_vars %>% 
+  group_by(el_stop_id) %>% 
+  summarise(el_rides_sum = sum(el_rides),
+            date_min = min(el_date),
+            date_max = max(el_date)
+            ) %>% 
+  arrange(el_rides_sum) %>% 
+  mutate(days_in_use = date_max - date_min,
+         row_num = row_number(el_rides_sum)
+         )
+
+```
+  
+    
+  So now I can just get the top, bottom, and middle to values for `el_station_id`.
+```{r}
+
+# top
+el_stop_id_top2 <-
+  el_stop_id_rank %>% 
+  top_n(n = 2, wt = el_rides_sum) %>% 
+  pull(el_stop_id)
+
+
+# bottom
+el_stop_id_bot2 <-
+  el_stop_id_rank %>% 
+  top_n(n = -2, wt = el_rides_sum) %>% 
+  pull(el_stop_id)
+
+
+# middle
+mid_row_num <-
+  round(max(el_stop_id_rank$row_num) / 2, digits = 0)
+
+el_stop_id_mid2 <-
+  el_stop_id_rank %>% 
+  filter(row_num %in% c(mid_row_num, mid_row_num + 1)
+         ) %>% 
+  pull(el_stop_id)
+
+rm(mid_row_num)
+
+
+# put everything together
+el_stop_id_6_values <-
+  c(el_stop_id_bot2, el_stop_id_mid2, el_stop_id_top2)
+
+
+rm(el_stop_id_rank, el_stop_id_bot2, el_stop_id_mid2, el_stop_id_top2)
+
+```
+  
+    
+  Now I can properly limit the data to the relevant `el_stop_id` values, and take 7-day lags of the relevant divvy variables.
+```{r}
+
+# limit the data to the six values of interest
+six_stations_data <-
+  el_stop_id_6_values %>% 
+  map(~ filter(remove_prcp_vars,
+               el_stop_id == .x
+               ) %>% 
+        arrange(el_date)
+      )
+
+six_stations_data %>% 
+  map(~ dim(.x))
+      
+      
+# get the proper lags
+regex_criteria <- "_cus$|_dep$|sub$"
+
 divvy_vars_lag7 <-
-  remove_prcp_vars %>% 
-  select(matches("_cus$|_dep$|sub$")
-         ) %>% 
-  mutate_all(funs(l7 = dplyr::lag(., n = 7)
-                  )
-             ) %>% 
-  select(matches("_l7"))
+  six_stations_data %>% 
+  map(~ select(.x,
+               matches(regex_criteria)
+               ) %>% 
+        mutate_all(funs(l7 = dplyr::lag(., n = 7)
+                        )
+                   )
+      )
 
-# str(divvy_vars_lag7)
-# View(divvy_vars_lag7 %>% head(1000))
+names(divvy_vars_lag7) <- el_stop_id_6_values
 
 
+pmap(.l = list(a = divvy_vars_lag7,
+               b = names(divvy_vars_lag7)
+               ),
+     .f = function(a, b) {
+       message(b)
+       
+       str(a)
+       }
+     )
 
-add_divvy_vars_lag7 <-
-  remove_prcp_vars %>% 
-  select(-matches("_cus$|_dep$|sub$")
-         ) %>% 
-  bind_cols(divvy_vars_lag7)
+# divvy_vars_lag7 %>% map(~ View(.x))
 
-dim(remove_prcp_vars)
-dim(add_divvy_vars_lag7)
+```
+  
+    
+  As a check, here I investigate just how accurate using a 7-day lag is for each variable.  
+    
+  First I'll create the function `func_sum_stats_by_col` to calculate the accuracy statistics for each variable-pair (e.g., `divvy_pt5mi_trip_cnt_cus` and `divvy_pt5mi_trip_cnt_cus_l7`).
+```{r}
 
-str(add_divvy_vars_lag7)
-View(add_divvy_vars_lag7 %>% head(1000))
+func_sum_stats_by_col <-
+  function(data) {
+    dat = data[8:nrow(data), ]
+    
+    preProcValues = preProcess(dat, method = c("center", "scale"))
+    dat_cent_scale = predict(preProcValues, dat)
+    
+    col_pos = seq(1:21)
+    
+    sum_stats =
+      pmap(.l = list(a = col_pos),
+           .f = function(a) {
+             
+             colnames(dat_cent_scale)[a] = "obs"
+             colnames(dat_cent_scale)[a + 21] = "pred"
+             
+             stats = defaultSummary(dat_cent_scale)
+             
+             return(stats)
+             }
+           )
+    
+    return(sum_stats)
+    }
+
+```
+  
+    
+  Now I simply use the `func_sum_stats_by_col` function for data on each value of `el_stop_id`, then turn the results into a dataframe for easier understanding.
+```{r warning=FALSE}
+
+acrcy_stats_lags_df <-
+  pmap(.l = list(a = divvy_vars_lag7),
+       .f = function(a) {
+         res = func_sum_stats_by_col(a)
+         
+         names(res) = names(a)[1:21]
+         
+         res_df = bind_rows(res) %>% 
+           t() %>% 
+           as.data.frame() %>% 
+           rename(RMSE = V1,
+                  rSqrd = V2,
+                  MAE = V3
+                  ) %>% 
+           rownames_to_column(var = "var_og")
+         
+         return(res_df)
+         }
+       )
+
+# View(acrcy_stats_lags_df$`40600`)
+
+
+rm(func_sum_stats_by_col)
+
+```
+  
+    
+  Now I just put all of the six datasets together as one, and then calculate some summary statistics.  
+    
+  Overall, using a lage of 7 has varying results depending on the variable. For example, using the median of the six MAE values, `divvy_pt5mi_triptime_mean_cus` is fairly accurate, whereas `divvy_all_triptime_mean_cus`. Interestingly, all of the values for `...pt5mi...` are the most accurate. Hopefully, this accuracy will be sufficient for predicing `el_rides`.
+```{r}
+
+acrcy_stats_lag_1df <-
+  bind_rows(acrcy_stats_lags_df,
+            .id = "el_stop_id"
+            ) %>% 
+  arrange(var_og,
+          MAE,
+          el_stop_id
+          )
+
+# View(acrcy_stats_lag_1df)
+
+
+acrcy_stats_sum_stats <-
+  acrcy_stats_lag_1df %>% 
+  group_by(var_og) %>% 
+  summarise(rmse_mean = mean(RMSE, na.rm = TRUE),
+            rmse_med = median(RMSE, na.rm = TRUE),
+            rsqrd_mean = mean(rSqrd, na.rm = TRUE),
+            rsqrd_med = median(rSqrd, na.rm = TRUE),
+            mae_mean = mean(MAE, na.rm = TRUE),
+            mae_med = median(MAE, na.rm = TRUE)
+            )
+
+acrcy_stats_sum_stats %>% 
+  arrange(mae_med)
+
+# View(acrcy_stats_sum_stats %>% 
+#        arrange(mae_med)
+#      )
+
+
+rm(acrcy_stats_lags_df, acrcy_stats_lag_1df, acrcy_stats_sum_stats)
+
+```
+  
+    
+  Now I simply add the lagged variables back into the "main" datasets in place of the un-lagged variables.
+```{r}
+
+# get the lagged variables
+divvy_vars_lag7_lag_vars <-
+  divvy_vars_lag7 %>% 
+  map(~ select(.x,
+               matches("_l7$")
+               )
+      )
+
+
+# then bind them to the "main" data
+six_stations_divvy_data_lags <-
+  pmap(.l = list(a = six_stations_data,
+                 b = divvy_vars_lag7_lag_vars
+                 ),
+       .f = function(a, b) {
+         new_dat = a %>% 
+           select(-matches(regex_criteria)
+                  ) %>% 
+           bind_cols(b)
+         
+         return(new_dat)
+         }
+       )
+
+names(six_stations_divvy_data_lags) <- names(divvy_vars_lag7_lag_vars)
+
+
+ncol(remove_prcp_vars)
+ncol(six_stations_divvy_data_lags$`41140`)
+colnames(six_stations_divvy_data_lags$`41140`)
+
+# View(six_stations_divvy_data_lags$`41140`)
+
+
+rm(remove_prcp_vars, divvy_vars_lag7, divvy_vars_lag7_lag_vars, six_stations_data, regex_criteria)
+
+```
+
+
+### Holidays
+
+  Here I simply take the 7-day lag of the holiday-related variables.
+```{r}
+
+six_stations_all_lags <-
+  pmap(.l = list(a = six_stations_divvy_data_lags),
+       .f = function(a) {
+         dat = a %>% 
+           mutate( holiday_name_l7 = dplyr::lag(holiday_name, n = 7),
+                   holiday_comment_l7 = dplyr::lag(holiday_comment, n = 7),
+                   holiday_l7 = dplyr::lag(holiday, n = 7)
+                   )
+         
+         dat = dat[8:nrow(dat), ]
+         
+         return(dat)
+         }
+      )
 
 
 ## Save the data to the proper folder
-saveRDS(add_divvy_vars_lag7,
+saveRDS(six_stations_all_lags,
         paste0(wd,
                "/Data/Interim/",
-               "add_divvy_vars_lag7.Rds"
+               "six_stations_all_lags.Rds"
                )
         )
 
 
-rm(divvy_vars_lag7, remove_prcp_vars)
+str(six_stations_all_lags$`41140`)
+View(six_stations_all_lags$`41140`)
+
+
+rm(six_stations_divvy_data_lags, el_stop_id_6_values)
 
 ```
 
 
+  **To Delete (below)**
+  
 ```{r}
 
-# add_divvy_vars_lag7 <-
+# six_stations_all_lags <-
 #   readRDS(paste0(wd,
 #                  "/Data/Interim/",
-#                  "add_divvy_vars_lag7.Rds"
+#                  "six_stations_all_lags.Rds"
 #                  )
 #           )
 # 
 # 
-# str(add_divvy_vars_lag7)
+# str(six_stations_all_lags$`41140`)
 
 ```
 
-
-### Holidays  
-  
-  sdf
-```{r}
-
-
-
-```
+  **To Delete (above)**
 
 
 
