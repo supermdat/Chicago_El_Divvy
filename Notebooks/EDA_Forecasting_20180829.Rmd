@@ -2121,32 +2121,27 @@ rm(remove_prcp_vars, divvy_vars_lag7, divvy_vars_lag7_lag_vars, six_stations_dat
 
 ### Holidays
 
-  Here I simply take the 7-day lag of the holiday-related variables.
+  Here I simply take the 7-day lag of the holiday-related variables, and turn relace `NA` values in `holiday_name` with a factor level for "not a holiday".
 ```{r}
 
 six_stations_all_lags <-
   pmap(.l = list(a = six_stations_divvy_data_lags),
        .f = function(a) {
          dat = a %>% 
-           mutate( holiday_name_l7 = dplyr::lag(holiday_name, n = 7),
-                   holiday_comment_l7 = dplyr::lag(holiday_comment, n = 7),
-                   holiday_l7 = dplyr::lag(holiday, n = 7)
+           mutate(holiday_name = if_else(is.na(holiday_name),
+                                         "--Not_Holiday--",
+                                         as.character(holiday_name)
+                                         ) %>% factor,
+                  holiday_name_l7 = dplyr::lag(holiday_name, n = 7),
+                  holiday_comment_l7 = dplyr::lag(holiday_comment, n = 7),
+                  holiday_l7 = dplyr::lag(holiday, n = 7)
                    )
          
-         dat = dat[8:nrow(dat), ]
+         # dat = dat[8:nrow(dat), ]
          
          return(dat)
          }
       )
-
-
-## Save the data to the proper folder
-saveRDS(six_stations_all_lags,
-        paste0(wd,
-               "/Data/Interim/",
-               "six_stations_all_lags.Rds"
-               )
-        )
 
 
 str(six_stations_all_lags$`41140`)
@@ -2158,283 +2153,250 @@ rm(six_stations_divvy_data_lags, el_stop_id_6_values)
 ```
 
 
+### El Rides
+
+ Determining the optimal number of lags of `el_rides`to include (based on the ACF).
+```{r}
+
+# function to measure ACF for each lag
+func_tidy_acf <- function(data, value, lags = 0:(7 * 8) # 7 days * 8 weeks as the default
+                     ) {
+  value_expr = enquo(value)
+  
+  acf_values = data %>% 
+    pull(!!value_expr) %>% 
+    acf(lag.max = tail(lags, 1),
+        plot = FALSE
+        ) %>% 
+    .$acf %>% 
+    .[,,1]
+  
+  ret = tibble(acf = acf_values) %>% 
+    rowid_to_column(var = "lag") %>% 
+    mutate(lag = lag - 1) %>% 
+    filter(lag %in% lags)
+  
+  return(ret)
+}
+
+
+
+max_lag <- 7 * 52 * 2 # 7 days * 52 weeks * 2 years
+
+pmap(.l = list(a = six_stations_all_lags,
+               b = names(six_stations_all_lags)
+               ),
+     .f = function(a, b) {
+       func_tidy_acf(a,
+                     value = el_rides,
+                     lags = 0:max_lag
+                     ) %>% 
+         # limited in this way as lags of 7n appear to be the most relevant
+         filter(lag == 0 |
+                  lag %% 7 == 0
+                ) %>%
+         mutate(url = b)
+       }
+     )
+
+
+pmap(.l = list(a = six_stations_all_lags,
+               b = names(six_stations_all_lags)
+               ),
+     .f = function(a, b) {
+       func_tidy_acf(a,
+                     value = el_rides,
+                     lags = 0:max_lag
+                     ) %>% 
+         # limited in this way as lags of 7n appear to be the most relevant
+         filter(lag == 0 |
+                  lag %% 7 == 0
+                ) %>%
+         ggplot(aes(x = lag,
+                    y = acf
+                    )
+                ) +
+         geom_segment(aes(xend = lag,
+                          yend = 0
+                          ),
+                      color = "blue"
+                      ) +
+         geom_vline(xintercept = 7,
+                    size = 2,
+                    color = "red"
+                    ) +
+         annotate("text", label = "1 Week Mark",
+                  x = 18,
+                  y = 0.9,
+                  color = "red",
+                  size = 3,
+                  hjust = 0
+                  ) +
+         labs(title = paste0("el_stop_id: ", b),
+              subtitle = "ACF (lags of 7): el_rides") +
+         theme_minimal() +
+         NULL
+       }
+     )
+
+
+
+optimal_lag_setting <-
+  six_stations_all_lags %>% 
+  map(~ func_tidy_acf(.x,
+                      value = el_rides,
+                      lags = 0:max_lag
+                      ) %>% 
+        filter(lag != 0) %>% 
+        top_n(n = 4, wt = acf) %>% 
+        arrange(desc(acf)) %>% 
+        # filter(acf == max(acf)
+        #        ) %>% 
+        pull(lag)
+      )
+
+optimal_lag_setting
+
+
+rm(max_lag, optimal_lag_setting, func_tidy_acf)
+
+```
+  
+    
+  The optimal lags are slightly different for each `el_stop_id`, but adding lags of 7, 14, 21, and 28 covers almost all of the top for lags for each `el_stop_id` value.
+```{r}
+
+el_rides_lags <-
+  six_stations_all_lags %>% 
+  map(~ mutate(.x,
+               el_rides_l07 = dplyr::lag(el_rides, n = 7),
+               el_rides_l14 = dplyr::lag(el_rides, n = 14),
+               el_rides_l21 = dplyr::lag(el_rides, n = 21),
+               el_rides_l28 = dplyr::lag(el_rides, n = 28),
+               )
+      )
+
+message("el_rides_lags")
+str(el_rides_lags$`41140`)
+# View(el_rides_lags$`41140`)
+
+
+rm(six_stations_all_lags)
+
+```
+  
+    
+  Similarly, here I'll take rolling averages of `el_rides` with windows of 7, 14, 21, and 28 days.
+```{r}
+
+el_rides_ma_values <-
+  el_rides_lags %>% 
+  map(~ mutate(.x,
+               el_rides_ma07 =
+                 rollapply(data = el_rides,
+                           width = 7,
+                           mean,
+                           na.rm = TRUE,
+                           align = "right",
+                           partial = FALSE,
+                           fill = NA
+                           ),
+               el_rides_ma14 =
+                 rollapply(data = el_rides,
+                           width = 14,
+                           mean,
+                           na.rm = TRUE,
+                           align = "right",
+                           partial = FALSE,
+                           fill = NA
+                           ),
+               el_rides_ma21 =
+                 rollapply(data = el_rides,
+                           width = 21,
+                           mean,
+                           na.rm = TRUE,
+                           align = "right",
+                           partial = FALSE,
+                           fill = NA
+                           ),
+               el_rides_ma28 =
+                 rollapply(data = el_rides,
+                           width = 28,
+                           mean,
+                           na.rm = TRUE,
+                           align = "right",
+                           partial = FALSE,
+                           fill = NA
+                           )
+               )
+      )
+
+message("el_rides_ma_values")
+str(el_rides_ma_values$`41140`)
+# View(el_rides_ma_values$`41140`)
+
+
+rm(el_rides_lags)
+
+```
+  
+    
+  As the lags and windows can only start computing values with the 29th value, here I will simply remove the first 28 rows of data (rather than imputing the lag/mov avg values).
+```{r}
+
+remove_first_28na_rows <-
+  pmap(.l = list(a = el_rides_ma_values),
+       .f = function(a) {
+         dat = a[29:nrow(a), ]
+         
+         return(dat)
+         }
+       )
+
+
+## Save the data to the proper folder
+saveRDS(remove_first_28na_rows,
+        paste0(wd,
+               "/Data/Interim/",
+               "remove_first_28na_rows.Rds"
+               )
+        )
+
+
+message("remove_first_28na_rows")
+str(remove_first_28na_rows$`41140`)
+View(remove_first_28na_rows$`41140`)
+
+
+remove_first_28na_rows %>% 
+  map(~ #select(.x,
+        #        -matches("holiday")
+        #        ) %>% 
+        # miss_var_summary()
+        miss_var_summary(.x)
+      )
+
+
+rm(el_rides_ma_values)
+
+```
+
+
   **To Delete (below)**
   
 ```{r}
 
-# six_stations_all_lags <-
+# remove_first_28na_rows <-
 #   readRDS(paste0(wd,
 #                  "/Data/Interim/",
-#                  "six_stations_all_lags.Rds"
+#                  "remove_first_28na_rows.Rds"
 #                  )
 #           )
 # 
 # 
-# str(six_stations_all_lags$`41140`)
+# str(remove_first_28na_rows$`41140`)
 
 ```
 
   **To Delete (above)**
-
-
-
-
-## Modeling
-
-### Model Prep  
-  
-  I'll be testing models that use the entire dataset, and also models that are specific to each `el_stop_id` (i.e., a model for each El entry point). Therefore, I'll create train-test splits (at 70% of the data) for each group.
-```{r}
-
-func_train_test_indicator <-
-  function(data, date_var, train_val_pct, train_pct, new_col_suffix) {
-    # get needed variables
-    date_var_enquo = enquo(date_var)
-    
-    date_min = data %>% 
-      select(!!date_var_enquo) %>% 
-      distinct() %>% 
-      top_n(n = -1, wt = !!date_var_enquo) %>% 
-      pull(!!date_var_enquo)
-    
-    date_max = data %>% 
-      select(!!date_var_enquo) %>% 
-      distinct() %>% 
-      top_n(n = 1, wt = !!date_var_enquo) %>% 
-      pull(!!date_var_enquo)
-    
-    # train and validation split
-    days_trainval = round(train_val_pct * (date_max - date_min))
-    split_date_trainval = date_min + days_trainval
-
-    # train split
-    days_train = round(train_pct * (split_date_trainval - date_min))
-    split_date_train = date_min + days_train
-
-    # new dataset
-    new_data =
-      data %>%
-      mutate(new_var =
-               case_when(el_date < split_date_train ~ "01_train",
-                         between(x = el_date,
-                                 lower = split_date_train,
-                                 upper = split_date_trainval,
-                                 incbounds = TRUE
-                                 ) ~ "02_validation",
-                         TRUE ~ "03_test"
-                         )
-             )
-
-    colnames(new_data)[length(new_data)] = paste0("data_use_", new_col_suffix)
-    
-    return(new_data)
-  }
-
-
-test <-
-  func_train_test_indicator(data = data_no_missing,
-                            date_var = el_date,
-                            train_val_pct = 0.8,
-                            train_pct = 0.7,
-                            new_col_suffix = "all"
-                            )
-
-colnames(data_no_missing) %>% tail(5)
-colnames(test) %>% tail(5)
-str(test)
-test %>% 
-  group_by(data_use_all_data) %>% 
-  summarise(min_el_date = min(el_date),
-            max_el_date = max(el_date)
-            )
-
-test_group <-
-  test %>% 
-  split(.$el_stop_id) %>% 
-  map(~ func_train_test_indicator(data = .x,
-                            date_var = el_date,
-                            train_val_pct = 0.8,
-                            train_pct = 0.7,
-                            new_col_suffix = "el_stop_id"
-                            )
-      ) %>% 
-  bind_rows()
-
-str(test_group)
-
-View(test_group %>% select(el_date, el_stop_id, data_use_all, data_use_el_stop_id) %>% head(5000))
-
-View(
-  test_group %>% 
-  group_by(el_stop_id, data_use_all) %>% 
-  summarise(ed_min_a = min(el_date),
-            ed_max_a = max(el_date)
-            ) %>% 
-    left_join(y = test_group %>% 
-                group_by(el_stop_id, data_use_el_stop_id) %>% 
-                summarise(ed_min_s = min(el_date),
-                          ed_max_s = max(el_date)
-                          ),
-              by = c("el_stop_id" = "el_stop_id",
-                     "data_use_all" = "data_use_el_stop_id"
-                     )
-              ) %>% 
-    mutate(match_min = if_else(ed_min_a == ed_min_s, TRUE, FALSE),
-           match_max = if_else(ed_max_a == ed_max_s, TRUE, FALSE)
-           ) %>% 
-    filter(match_min == FALSE | match_max == FALSE)
-)
-
-
-View(test_group %>% 
-       select(el_stop_id, el_date, el_rides, data_use_all, data_use_el_stop_id) %>%
-       filter(el_stop_id %in% c(41690, 41700)
-              )
-     )
-
-
-View(
-test_group %>% 
-  count(el_stop_id, data_use_all) %>% 
-  rename(n_a = n) %>% 
-  left_join(y = test_group %>% 
-              count(el_stop_id, data_use_el_stop_id) %>% 
-              rename(n_es = n),
-            by = c("el_stop_id" = "el_stop_id", 
-                   "data_use_all" = "data_use_el_stop_id"
-                   )
-            ) %>% 
-  mutate(match = if_else(n_a == n_es, TRUE, FALSE)) %>% 
-  filter(match == FALSE)
-)
-
-test_group %>% 
-  count(data_use_all)
-
-test_group %>% 
-  count(data_use_el_stop_id)
-
-
-
-
-
-
-min_train <- min(all_data_datesformatted_list$train$train_date)
-max_train <- max(all_data_datesformatted_list$train$train_date)
-
-min_test <- min(all_data_datesformatted_list$test$test_date)
-max_test <- max(all_data_datesformatted_list$test$test_date)
-
-pt7_train_days <- round(0.7 * (max_train - min_train))
-train_split_point <- min_train + pt7_train_days
-
-
-dates_dt <- 
-  as.data.table(x = as_date(min_train:max_test)
-                ) %>%  
-  tk_augment_timeseries_signature()
-  
-
-colnames(dates_dt)[1] <- "date_"
-
-
-dates_dt <- dates_dt %>% 
-  mutate(yrmth = floor_date(date_, unit = "month"),
-         dataset_purpose = case_when(date_ < train_split_point ~ "train",
-                                     between(x = date_,
-                                             lower = train_split_point,
-                                             upper = max_train,
-                                             incbounds = TRUE
-                                             ) ~ "validation",
-                                     TRUE ~ "test"
-                                     )
-         ) %>% 
-  mutate_if(is.character, as.factor) %>% 
-
-rm(pt7_train_days)
-
-```
-
-
-  Loading the final dataset again.
-```{r}
-
-##  THINK ABOUT:
-
-  ## Lagging all divvy data by 21 days (including all "date"-related variables)
-
-  ## Removing data on `prcp` & `snow` (as we won't know that accurately in advance)
-  ## Modifying `tmax` & `tmin` to 10 degree F increments (as we're more likely to know that in advance than specific temperature readings)
-
-
-data_no_missing <-
-  readRDS(paste0(wd,
-                 "/Data/Interim/",
-                 "data_no_missing.Rds"
-                 )
-          )
-
-
-str(data_no_missing)
-
-```
-
-
-
-```{r}
-
-
-
-## Quick plot inspection
-common_el_stop <-
-  add_weather %>% 
-  group_by(el_stop_id) %>% 
-  summarise(rides_tot = sum(el_rides)
-            ) %>% 
-  top_n(n = 1, wt = rides_tot) %>% 
-  pull(el_stop_id)
-
-add_weather %>% 
-  filter(el_stop_id == common_el_stop) %>% 
-  ggplot(aes(x = el_date,
-             y = el_rides
-             )
-         ) +
-  geom_line()
-
-rm(common_el_stop)
-
-
-```
-
-
-## Just inspecting the data to this point
-```{r}
-
-# message("distance_el_divvy_stations_dt")
-# str(distance_el_divvy_stations_dt)
-# 
-# message("divvy_trips_by_day")
-# str(divvy_trips_by_day)
-# 
-# message("divvy_trips_by_day_from")
-# str(divvy_trips_by_day_from)
-
-message("el_stns_full_dates_daily_stats_all")
-str(el_stns_full_dates_daily_stats_all)
-
-
-pmap(.l = list(a = names(rds_files),
-               b = rds_files
-               ),
-     .f = function(a, b) {
-       message(a)
-       
-       str(b)
-       }
-     )
-
-```
-
-
 
