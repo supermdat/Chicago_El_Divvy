@@ -2145,7 +2145,7 @@ six_stations_all_lags <-
 
 
 str(six_stations_all_lags$`41140`)
-View(six_stations_all_lags$`41140`)
+# View(six_stations_all_lags$`41140`)
 
 
 rm(six_stations_divvy_data_lags, el_stop_id_6_values)
@@ -2354,18 +2354,9 @@ remove_first_28na_rows <-
        )
 
 
-## Save the data to the proper folder
-saveRDS(remove_first_28na_rows,
-        paste0(wd,
-               "/Data/Interim/",
-               "remove_first_28na_rows.Rds"
-               )
-        )
-
-
 message("remove_first_28na_rows")
 str(remove_first_28na_rows$`41140`)
-View(remove_first_28na_rows$`41140`)
+# View(remove_first_28na_rows$`41140`)
 
 
 remove_first_28na_rows %>% 
@@ -2382,21 +2373,1063 @@ rm(el_rides_ma_values)
 ```
 
 
+## Modeling
+
+### Model Prep
+
+#### Add An Indicator for Train-Validation-Test
+  
+  I'll be testing models that use the entire dataset, and also models that are specific to each `el_stop_id` (i.e., a model for each El entry point). Therefore, I'll create train-test splits (at 70% of the data) for each group.  
+    
+  First, I'll create a function to to create the proper value depending on the situation (i.e., creating the split for the entire dataset, or for each value of `el_stop_id` as a single entity).
+```{r}
+
+func_train_test_indicator <-
+  function(data, date_var, train_val_pct, train_pct, new_col_suffix) {
+    # get needed variables
+    date_var_enquo = enquo(date_var)
+    
+    date_min = data %>% 
+      select(!!date_var_enquo) %>% 
+      distinct() %>% 
+      top_n(n = -1, wt = !!date_var_enquo) %>% 
+      pull(!!date_var_enquo)
+    
+    date_max = data %>% 
+      select(!!date_var_enquo) %>% 
+      distinct() %>% 
+      top_n(n = 1, wt = !!date_var_enquo) %>% 
+      pull(!!date_var_enquo)
+    
+    # train and validation split
+    days_trainval = round(train_val_pct * (date_max - date_min))
+    split_date_trainval = date_min + days_trainval
+
+    # train split
+    days_train = round(train_pct * (split_date_trainval - date_min))
+    split_date_train = date_min + days_train
+
+    # new dataset
+    new_data =
+      data %>%
+      mutate(new_var =
+               case_when(el_date < split_date_train ~ "01_train",
+                         between(x = el_date,
+                                 lower = split_date_train,
+                                 upper = split_date_trainval,
+                                 incbounds = TRUE
+                                 ) ~ "02_validation",
+                         TRUE ~ "03_test"
+                         )
+             )
+
+    colnames(new_data)[length(new_data)] = paste0("data_use_", new_col_suffix)
+    
+    return(new_data)
+  }
+
+
+# test <-
+#   func_train_test_indicator(data = bind_rows(six_stations_all_lags, .id = "id"),
+#                             date_var = el_date,
+#                             train_val_pct = 0.8,
+#                             train_pct = 0.7,
+#                             new_col_suffix = "all"
+#                             )
+# 
+# colnames(bind_rows(six_stations_all_lags, .id = "id")
+#          ) %>% tail(5)
+# colnames(test) %>% tail(6)
+# str(test)
+# test %>% 
+#   group_by(data_use_all) %>% 
+#   summarise(min_el_date = min(el_date),
+#             max_el_date = max(el_date)
+#             )
+
+# test_group <-
+#   remove_first_28na_rows %>% 
+#   map(~ func_train_test_indicator(data = .x,
+#                                   date_var = el_date,
+#                                   train_val_pct = 0.8,
+#                                   train_pct = 0.7,
+#                                   new_col_suffix = "el_stop_id"
+#                                   )
+#       ) 
+# %>% 
+#   bind_rows()
+
+# str(test_group$`41140`)
+
+# View(test_group$`41140` %>% 
+#        select(el_date, el_stop_id, data_use_all, data_use_el_stop_id) #%>% 
+#        # head(5000)
+#      )
+
+# View(
+#   test_group %>% 
+#   group_by(el_stop_id, data_use_all) %>% 
+#   summarise(ed_min_a = min(el_date),
+#             ed_max_a = max(el_date)
+#             ) %>% 
+#     left_join(y = test_group %>% 
+#                 group_by(el_stop_id, data_use_el_stop_id) %>% 
+#                 summarise(ed_min_s = min(el_date),
+#                           ed_max_s = max(el_date)
+#                           ),
+#               by = c("el_stop_id" = "el_stop_id",
+#                      "data_use_all" = "data_use_el_stop_id"
+#                      )
+#               ) %>% 
+#     mutate(match_min = if_else(ed_min_a == ed_min_s, TRUE, FALSE),
+#            match_max = if_else(ed_max_a == ed_max_s, TRUE, FALSE)
+#            ) %>% 
+#     filter(match_min == FALSE | match_max == FALSE)
+# )
+
+
+# View(test_group %>% 
+#        select(el_stop_id, el_date, el_rides, data_use_all, data_use_el_stop_id) %>%
+#        filter(el_stop_id %in% c(41690, 41700)
+#               )
+#      )
+
+
+# View(
+# test_group %>% 
+#   count(el_stop_id, data_use_all) %>% 
+#   rename(n_a = n) %>% 
+#   left_join(y = test_group %>% 
+#               count(el_stop_id, data_use_el_stop_id) %>% 
+#               rename(n_es = n),
+#             by = c("el_stop_id" = "el_stop_id", 
+#                    "data_use_all" = "data_use_el_stop_id"
+#                    )
+#             ) %>% 
+#   mutate(match = if_else(n_a == n_es, TRUE, FALSE)) %>% 
+#   filter(match == FALSE)
+# )
+# 
+# test_group %>% 
+#   count(data_use_all)
+# 
+# test_group %>% 
+#   count(data_use_el_stop_id)
+
+```
+  
+    
+  Here I run the function for each value of `el_stop_id`.
+```{r}
+
+add_trn_val_test <-
+  remove_first_28na_rows %>% 
+  map(~ func_train_test_indicator(data = .x,
+                                  date_var = el_date,
+                                  train_val_pct = 0.8,
+                                  train_pct = 0.7,
+                                  new_col_suffix = "el_stop_id"
+                                  ) %>% 
+        mutate(wday.lbl = factor(as.character(wday.lbl)
+                                 )
+               )
+      ) 
+
+
+## Save the data to the proper folder
+saveRDS(add_trn_val_test,
+        paste0(wd,
+               "/Data/Interim/",
+               "add_trn_val_test.Rds"
+               )
+        )
+
+
+str(add_trn_val_test$`41140`)
+
+add_trn_val_test %>% 
+  map(~ group_by(.x,
+                 data_use_el_stop_id
+                 ) %>% 
+        summarise(date_min = min(el_date),
+                  date_max = max(el_date)
+                  )
+      )
+
+
+rm(remove_first_28na_rows, func_train_test_indicator)
+
+```
+
+
+
   **To Delete (below)**
   
 ```{r}
 
-# remove_first_28na_rows <-
+# add_trn_val_test <-
 #   readRDS(paste0(wd,
 #                  "/Data/Interim/",
-#                  "remove_first_28na_rows.Rds"
+#                  "add_trn_val_test.Rds"
 #                  )
 #           )
 # 
 # 
-# str(remove_first_28na_rows$`41140`)
+# str(add_trn_val_test$`41140`)
 
 ```
 
   **To Delete (above)**
+
+
+
+```{r}
+
+
+# # test_df_41140 <-
+#   add_trn_val_test$`41140` %>% 
+#   # filter(el_stop_id == 41140) %>% 
+#   select(#-id,
+#          -holiday_comment,
+#          -holiday_comment_l7,
+#          # -data_use_all,
+#          -day
+#          ) %>% 
+#   mutate(data_use_el_stop_id = factor(data_use_el_stop_id)
+#          ) %>% 
+#   select(-holiday) %>% 
+#   mutate_if(is.factor, factor) %>% 
+#   summary()
+# 
+# # test_df_41140$el_rides %>% auto.arima()
+# 
+# pmap(.l = list(a = remove_first_28na_rows),
+#      .f = function(a) {
+#        dat = a$el_rides
+#        
+#        aa = auto.arima(dat)
+#        }
+#      )
+
+```
+
+
+#### Handling Factor Variables  
+  
+  Turn factor variables into dummy variables. **NOTE** that this is done with all levels of the factor. That is, it does **NOT** use "full rank parameterization" to leave one level out (e.g., to be used as the linear model's intercept).
+```{r}
+
+# create the function to create dummy vars
+func_one_hot_vars <-
+  function(x) {
+    data_s = x %>% 
+      select(-holiday_comment,
+             -holiday,
+             -day,
+             -holiday_comment_l7,
+             -holiday_l7
+             )
+    
+    formula =
+      dummyVars(el_rides ~ .,
+                data = data_s %>% 
+                  select(-el_date,
+                         -el_stop_id,
+                         -data_use_el_stop_id
+                         ),
+                fullRank = FALSE
+                )
+    
+    data_DV =
+      data_s %>% 
+      select(el_rides,
+             el_date,
+             el_stop_id,
+             data_use_el_stop_id
+             ) %>% 
+      bind_cols(predict(object = formula,
+                        newdata = data_s %>% 
+                          select(-el_date,
+                                 -el_stop_id,
+                                 -data_use_el_stop_id
+                                 )
+                        ) %>% 
+                  as.data.frame()
+                )
+    }
+
+
+# run the function
+DV_data <-
+  add_trn_val_test %>% 
+  map(~ func_one_hot_vars(.x)
+      )
+
+glimpse(DV_data$`41140`)
+
+
+rm(func_one_hot_vars)
+
+```
+ 
+ 
+#### Accuracy Metrics
+   
+  I'll try both `caret::randomForest` and `caret::xgboost` on the dataset USING dummy variables. But first, I need to create some custom accuracy metrics.
+```{r}
+
+func_custom_accuracy_metrics <-
+  function(data, lev = NULL, model = NULL) {
+    mae =
+      function(actual, predicted) {
+        mean(abs((actual - predicted)
+                 ),
+             na.rm = TRUE
+             )
+        }
+    
+    mape =
+      function(actual, predicted) {
+        mean(abs((actual - predicted) / actual * 100),
+             na.rm = TRUE
+             )
+        }
+    
+    rmse =
+      function(actual, predicted) {
+        sqrt(mean((actual - predicted)^2,
+                  na.rm = TRUE
+                  )
+             )
+        }
+    
+    r2 =
+      function(actual, predicted) {
+        1 - (sum((actual - predicted)^2
+                 ) / sum((actual - mean(actual)
+                          )^2
+                         )
+             )
+    }
+    
+    
+    out = c(mae(data$obs,
+                data$pred
+                ),
+            mape(data$obs,
+                 data$pred
+                 ),
+            rmse(data$obs,
+                 data$pred
+                 ),
+            r2(data$obs,
+               data$pred
+               )
+            )
+
+    
+    names(out) = c("MAE", "MAPE", "RMSE", "R2")
+    
+    out
+    }
+
+```
+
+
+#### Models  
+  
+  First, limit to just training data, and confirm the datasets to use are the same (except for the one-hot-encoding producing dummy variables).
+```{r}
+
+train_data <-
+  add_trn_val_test %>% 
+  map(~ filter(.x,
+               data_use_el_stop_id == "01_train"
+               )
+      )
+
+DV_train_data <-
+  DV_data %>% 
+  map(~ filter(.x,
+               data_use_el_stop_id == "01_train"
+               )
+      )
+
+
+message("train_data")
+train_data %>% 
+  map(~ dim(.x)
+      )
+
+message("DV_train_data")
+DV_train_data %>% 
+  map(~ dim(.x)
+      )
+
+
+message("train_data")
+train_data$`41140` %>% glimpse()
+
+message("DV_train_data")
+DV_train_data$`41140` %>% glimpse()
+
+```
+
+
+  Now I reduce the number of variables by using `caret::nearZeroVar` and `caret::corr`. This is done individually as `caret` will not handle a variable of zero standard deviation.  
+    
+  First, I use `caret::nearZeroVar` to remove variables with "near zero variance.
+```{r}
+
+DV_nzv_list <-
+  DV_train_data %>%
+  map(~ preProcess(.x,
+                   # method = c("nzv", "corr", "center", "scale", "medianImpute"),
+                   method = "nzv"
+                   )
+      )
+
+DV_nzv_predict <-
+  map2(.x = DV_nzv_list,
+       .y = DV_train_data,
+       .f = function(a, b) {
+         predict(a, b)
+       }
+       )
+
+
+message("before reduction")
+DV_train_data %>%
+  map(~ dim(.x)
+      )
+
+DV_train_data$`41140` %>%
+  glimpse()
+
+
+message("after near-zero variable reduction")
+DV_nzv_predict %>%
+  map(~ dim(.x)
+      )
+
+DV_nzv_predict$`41140` %>%
+  glimpse()
+
+
+rm(DV_nzv_list)
+
+```  
+
+
+  First, I use `caret::corr` to remove highly correlated variables.
+```{r}
+
+DV_corr_list <-
+  DV_nzv_predict %>%
+  map(~ preProcess(.x,
+                   # method = c("nzv", "corr", "center", "scale", "medianImpute"),
+                   method = "corr"
+                   )
+      )
+
+DV_corr_predict <-
+  map2(.x = DV_corr_list,
+       .y = DV_nzv_predict,
+       .f = function(a, b) {
+         predict(a, b)
+       }
+       )
+
+
+message("before corr reduction")
+DV_nzv_predict %>%
+  map(~ dim(.x)
+      )
+
+DV_nzv_predict$`41140` %>%
+  glimpse()
+
+
+message("after corr variable reduction")
+DV_corr_predict %>%
+  map(~ dim(.x)
+      )
+
+DV_corr_predict$`41140` %>%
+  glimpse()
+
+
+rm(DV_corr_list)
+
+```  
+  
+    
+  Modeling parameters used in multiple models.
+```{r}
+
+# period_train <- (365 * 2) + 30 # 2 years + 28 days of data needed for LSTM Keras modeling
+# period_test <- (365 * 1) + 30 # test on 1 year * 28 days of data (even though we just predict 14 days out) needed for LSTM Keras modeling
+# skip_span <- 7 * 2 # gives 14 evenly distributed  splits
+
+
+period_train <- round((365 * 1.5),
+                      digits = 0
+                      ) + 30 # 2 years + 28 days of data needed for LSTM Keras modeling
+period_test <- round((365 * 0.5),
+                     digits = 0
+                     ) + 30 # test on 1 year * 28 days of data (even though we just predict 14 days out) needed for LSTM Keras modeling
+skip_span <- 8 # gives 13 evenly distributed  splits
+
+```
+
+
+### Random Forest  
+  
+ Create one model with preprocessing that removes highly correlated variables, and one model that does not.
+```{r}
+
+tot_cores <- detectCores()
+cl <- makeCluster(tot_cores - 1)
+registerDoParallel(cl)
+
+
+start <- proc.time()
+DV_Fit.Rf.corr_yes <-
+  # DV_train_data[1:2] %>%
+  DV_corr_predict %>%
+  map(.f = function(a) {
+    fitControl =
+      trainControl(method = "timeslice",
+                   # initialWindow = ceiling(nrow(a) * (1/3)
+                   #                         ),
+                   initialWindow = period_train,
+                   # horizon = 7,
+                   horizon = period_test,
+                   fixedWindow = TRUE,
+                   skip = skip_span,
+                   # skip = 85,
+                   summaryFunction = func_custom_accuracy_metrics
+                   # preProcOptions = list(cutoff = 0.7)
+                   )
+
+    # grid_rf =
+    #   expand.grid(mtry = seq(100, 500, 100)
+    #               )
+
+    set.seed(123456789)
+
+    output =
+      train(el_rides ~ .,
+            data = a %>% 
+              select(#-el_stop_id,
+                     -data_use_el_stop_id
+                     ),
+            preProcess = c(#"nzv"
+                           #"corr"
+                           "center",
+                           "scale",
+                           "medianImpute"
+                           ),
+            # preProcess = c("nzv", "center", "scale", "medianImpute"),
+            na.action = na.pass,
+            method = "rf",
+            metric = "RMSE",
+            maximize = FALSE,
+            importance = TRUE,
+            trControl = fitControl,
+            # ntree = 1000,
+            # tuneGrid = grid_rf,
+            verbose = TRUE
+            )
+
+    return(output)
+    }
+    )
+
+time.Rf.corr_yes <- proc.time() - start
+
+message("DV_Fit.Rf.corr_yes")
+DV_Fit.Rf.corr_yes
+
+
+start <- proc.time()
+DV_Fit.Rf.corr_no <-
+  # DV_train_data %>%
+  DV_nzv_predict %>%
+  map(.f = function(a) {
+    fitControl =
+      trainControl(method = "timeslice",
+                   # initialWindow = ceiling(nrow(a) * (1/3)
+                   #                         ),
+                   initialWindow = period_train,
+                   # horizon = 7,
+                   horizon = period_test,
+                   fixedWindow = TRUE,
+                   skip = skip_span,
+                   # skip = 85,
+                   summaryFunction = func_custom_accuracy_metrics
+                   # preProcOptions = list(cutoff = 0.7)
+                   )
+    
+    # grid_rf =
+    #   expand.grid(mtry = seq(100, 500, 100)
+    #               )
+    
+    set.seed(123456789)
+    
+    output =
+      train(el_rides ~ .,
+            data = a %>% 
+              select(#-el_stop_id,
+                     -data_use_el_stop_id
+                     ),
+            preProcess = c(#"nzv"
+                           #"corr"
+                           "center",
+                           "scale",
+                           "medianImpute"
+                           ),
+            # preProcess = c("nzv", "center", "scale", "medianImpute"),
+            na.action = na.pass,
+            method = "rf",
+            metric = "RMSE",
+            maximize = FALSE,
+            importance = TRUE,
+            trControl = fitControl,
+            # ntree = 1000,
+            # tuneGrid = grid_rf,
+            verbose = TRUE
+            )
+    
+    return(output)
+    }
+    )
+
+time.Rf.corr_no <- proc.time() - start
+
+message("DV_Fit.Rf.corr_no")
+DV_Fit.Rf.corr_no
+
+
+stopCluster(cl)
+rm(start, tot_cores, cl)
+
+```
+
+  
+    
+  Compare the results.
+```{r}
+
+# user  system elapsed 
+#  69.509   6.675 537.883 
+# ~ 9 min 
+message("time.Rf.corr_yes")
+time.Rf.corr_yes
+
+# user  system elapsed 
+#  45.860   2.914 514.294
+# ~ 9 min
+message("time.Rf.corr_no")
+time.Rf.corr_no
+
+
+# Create a list of models
+Models.Rf <-
+  pmap(.l = list(a = DV_Fit.Rf.corr_yes,
+                 b = DV_Fit.Rf.corr_no
+                 ),
+       .f = function(a, b) {
+         l = list(Corr_No = a,
+                  Corr_Yes = b
+                  )
+         
+         return(l)
+         }
+       )
+
+
+# Resample the models
+Resample_Results.Rf <-
+  Models.Rf %>% 
+  map(~ resamples(.x)
+      )
+
+
+# Generate a summary
+Resample_Results.Rf %>% 
+  map(~ summary(.x)
+      )
+
+Resample_Results.Rf %>% 
+  map(~ bwplot(.x)
+      )
+
+```
+  
+    
+  After inspecting the results, we choose to keep the model that includes the correlation filter in the preprocessing stage - the results and runtimes were similar.
+```{r}
+
+rm(list = ls(pattern = "corr_no"))
+
+
+saveRDS(DV_Fit.Rf.corr_yes,
+        paste0(wd,
+               "/Data_Processed/",
+               "DV_Fit.Rf.corr_yes.Rds"
+               )
+        )
+
+# DV_Fit.Rf.corr_yes <-
+#   readRDS(paste0(wd,
+#                  "/Data_Processed/",
+#                  "DV_Fit.Rf.corr_yes.Rds"
+#                  )
+#           )
+
+```
+  
+    
+  Inspect varialbe importance.
+```{r}
+
+# Permutation improtance is used for the variable importance
+# Based on discussion here:  http://parrt.cs.usfca.edu/doc/rf-importance/index.html
+VI <- DV_Fit.Rf.corr_no %>% 
+  map(~ varImp(.x,
+               type = 1,
+               scale = TRUE
+               )
+      )
+
+VI
+
+
+VI %>% 
+  map(~ plot(.x, top = 20)
+      )
+
+
+rm(VI)
+
+```
+
+
+### Extreme Gradient Boosted Tree
+  
+ Create one model with preprocessing that removes highly correlated variables, and one model that does not.
+```{r}
+
+tot_cores <- detectCores()
+cl <- makeCluster(tot_cores - 1)
+registerDoParallel(cl)
+
+
+start <- proc.time()
+DV_Fit.Xgbtree.corr_yes <-
+  # DV_train_data[1:2] %>%
+  DV_corr_predict %>%
+  map(.f = function(a) {
+    fitControl =
+      trainControl(method = "timeslice",
+                   # initialWindow = ceiling(nrow(a) * (1/3)
+                   #                         ),
+                   initialWindow = period_train,
+                   # horizon = 7,
+                   horizon = period_test,
+                   fixedWindow = TRUE,
+                   skip = skip_span,
+                   # skip = 85,
+                   summaryFunction = func_custom_accuracy_metrics
+                   # preProcOptions = list(cutoff = 0.7)
+                   )
+
+    # grid_rf =
+    #   expand.grid(mtry = seq(100, 500, 100)
+    #               )
+
+    set.seed(123456789)
+
+    output =
+      train(el_rides ~ .,
+            data = a %>% 
+              select(#-el_stop_id,
+                     -data_use_el_stop_id
+                     ),
+            preProcess = c(#"nzv"
+                           #"corr"
+                           "center",
+                           "scale",
+                           "medianImpute"
+                           ),
+            # preProcess = c("nzv", "center", "scale", "medianImpute"),
+            na.action = na.pass,
+            method = "xgbTree",
+            metric = "RMSE",
+            maximize = FALSE,
+            importance = TRUE,
+            trControl = fitControl,
+            # ntree = 1000,
+            # tuneGrid = grid_rf,
+            verbose = TRUE
+            )
+
+    return(output)
+    }
+    )
+
+time.Xgbtree.corr_yes <- proc.time() - start
+
+# message("DV_Fit.Xgbtree.corr_yes")
+# DV_Fit.Xgbtree.corr_yes
+
+
+
+start <- proc.time()
+DV_Fit.Xgbtree.corr_no <-
+  # DV_train_data %>%
+  DV_nzv_predict %>%
+  map(.f = function(a) {
+    fitControl =
+      trainControl(method = "timeslice",
+                   # initialWindow = ceiling(nrow(a) * (1/3)
+                   #                         ),
+                   initialWindow = period_train,
+                   # horizon = 7,
+                   horizon = period_test,
+                   fixedWindow = TRUE,
+                   skip = skip_span,
+                   # skip = 85,
+                   summaryFunction = func_custom_accuracy_metrics
+                   # preProcOptions = list(cutoff = 0.7)
+                   )
+    
+    # grid_rf =
+    #   expand.grid(mtry = seq(100, 500, 100)
+    #               )
+    
+    set.seed(123456789)
+    
+    output =
+      train(el_rides ~ .,
+            data = a %>% 
+              select(#-el_stop_id,
+                     -data_use_el_stop_id
+                     ),
+            preProcess = c(#"nzv"
+                           #"corr"
+                           "center",
+                           "scale",
+                           "medianImpute"
+                           ),
+            # preProcess = c("nzv", "center", "scale", "medianImpute"),
+            na.action = na.pass,
+            method = "xgbTree",
+            metric = "RMSE",
+            maximize = FALSE,
+            importance = TRUE,
+            trControl = fitControl,
+            # ntree = 1000,
+            # tuneGrid = grid_rf,
+            verbose = TRUE
+            )
+    
+    return(output)
+    }
+    )
+
+time.Xgbtree.corr_no <- proc.time() - start
+
+# message("DV_Fit.Xgbtree.corr_no")
+# DV_Fit.Xgbtree.corr_no
+
+
+stopCluster(cl)
+rm(start, tot_cores, cl)
+
+```
+
+    
+  Compare the results.
+```{r}
+
+# user  system elapsed 
+#  14.295   5.260 419.687 
+# ~ 7 min 
+message("time.Xgbtree.corr_yes")
+time.Xgbtree.corr_yes
+
+# user  system elapsed 
+#  11.693   3.223 299.199
+# ~ 5 min
+message("time.Xgbtree.corr_no")
+time.Xgbtree.corr_no
+
+
+# Create a list of models
+Models.Xgbtree <-
+  pmap(.l = list(a = DV_Fit.Xgbtree.corr_yes,
+                 b = DV_Fit.Xgbtree.corr_no
+                 ),
+       .f = function(a, b) {
+         l = list(Corr_No = a,
+                  Corr_Yes = b
+                  )
+         
+         return(l)
+         }
+       )
+
+
+# Resample the models
+Resample_Results.Xgbtree <-
+  Models.Xgbtree %>% 
+  map(~ resamples(.x)
+      )
+
+
+# Generate a summary
+Resample_Results.Xgbtree %>% 
+  map(~ summary(.x)
+      )
+
+Resample_Results.Xgbtree %>% 
+  map(~ bwplot(.x)
+      )
+
+```
+  
+    
+  After inspecting the results, we choose to keep the model that does NOT include the correlation filter in the preprocessing stage - the results were similar, and the run time was about half as long.
+```{r}
+
+rm(list = ls(pattern = "corr_no"))
+
+
+saveRDS(DV_Fit.Xgbtree.corr_yes,
+        paste0(wd,
+               "/Data_Processed/",
+               "DV_Fit.Xgbtree.corr_yes.Rds"
+               )
+        )
+
+# DV_Fit.Xgbtree.corr_yes <-
+#   readRDS(paste0(wd,
+#                  "/Data_Processed/",
+#                  "DV_Fit.Xgbtree.corr_yes.Rds"
+#                  )
+#           )
+
+```
+  
+    
+  Inspect varialbe importance.
+```{r}
+
+# Permutation improtance is used for the variable importance
+# Based on discussion here:  http://parrt.cs.usfca.edu/doc/rf-importance/index.html
+VI <- DV_Fit.Xgbtree.corr_yes %>% 
+  map(~ varImp(.x,
+               type = 1,
+               scale = TRUE
+               )
+      )
+
+VI
+
+
+VI %>% 
+  map(~ plot(.x, top = 20)
+      )
+
+
+rm(VI)
+
+```
+
+
+
+
+  Loading the final dataset again.
+```{r}
+
+##  THINK ABOUT:
+
+  ## Lagging all divvy data by 21 days (including all "date"-related variables)
+
+  ## Removing data on `prcp` & `snow` (as we won't know that accurately in advance)
+  ## Modifying `tmax` & `tmin` to 10 degree F increments (as we're more likely to know that in advance than specific temperature readings)
+
+
+data_no_missing <-
+  readRDS(paste0(wd,
+                 "/Data/Interim/",
+                 "data_no_missing.Rds"
+                 )
+          )
+
+
+str(data_no_missing)
+
+```
+
+
+
+```{r}
+
+
+
+## Quick plot inspection
+common_el_stop <-
+  add_weather %>% 
+  group_by(el_stop_id) %>% 
+  summarise(rides_tot = sum(el_rides)
+            ) %>% 
+  top_n(n = 1, wt = rides_tot) %>% 
+  pull(el_stop_id)
+
+add_weather %>% 
+  filter(el_stop_id == common_el_stop) %>% 
+  ggplot(aes(x = el_date,
+             y = el_rides
+             )
+         ) +
+  geom_line()
+
+rm(common_el_stop)
+
+
+```
+
+
+## Just inspecting the data to this point
+```{r}
+
+# message("distance_el_divvy_stations_dt")
+# str(distance_el_divvy_stations_dt)
+# 
+# message("divvy_trips_by_day")
+# str(divvy_trips_by_day)
+# 
+# message("divvy_trips_by_day_from")
+# str(divvy_trips_by_day_from)
+
+message("el_stns_full_dates_daily_stats_all")
+str(el_stns_full_dates_daily_stats_all)
+
+
+pmap(.l = list(a = names(rds_files),
+               b = rds_files
+               ),
+     .f = function(a, b) {
+       message(a)
+       
+       str(b)
+       }
+     )
+
+```
+
+
 
