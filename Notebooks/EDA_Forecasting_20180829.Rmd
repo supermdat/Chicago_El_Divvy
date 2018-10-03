@@ -33,11 +33,12 @@ library("prophet")
 library("caret")
 library("randomForest")
 library("xgboost")
-library("glmnet")
-library("neuralnet")
-library("nnet")
-library("gam")
-library("RANN")               # kNN (used in caret NA imputation)
+library("h2o")
+# library("glmnet")
+# library("neuralnet")
+# library("nnet")
+# library("gam")
+# library("RANN")               # kNN (used in caret NA imputation)
 library("keras")
 # use_session_with_seed(123456789) # setting the seed to obtain reproducible results
 # see https://keras.rstudio.com/articles/faq.html#how-can-i-obtain-reproducible-results-using-keras-during-development and https://cran.r-project.org/web/packages/keras/vignettes/faq.html
@@ -5011,13 +5012,9 @@ plot_interp_extrap <-
 plot_interp_extrap
 
 ```
-
-
-
-
-
-
-
+  
+    
+  For each `el_stop_id`, plot the median RMSE for each model. First I munge the data.
 ```{r}
 
 median_RMSE_by_model <-
@@ -5048,6 +5045,11 @@ median_RMSE_by_model <-
 
 # View(median_RMSE_by_model)
 
+```
+  
+    
+  Now I create the plot itself.
+```{r}
 
 median_RMSE_by_model %>% 
   gather(key = "model",
@@ -5065,15 +5067,17 @@ median_RMSE_by_model %>%
                                )
                 ),
             size = 3,
-            nudge_y = 15
+            hjust = 1
+            # nudge_y = -50
             ) +
   facet_wrap(~ el_stop_id,
              ncol = 2,
              scales = "free"
              ) +
-  # scale_y_continuous(limits = c(0, 110),
-  #                    breaks = seq(0, 110, 25)
+  # scale_y_continuous(limits = c(0, max(test$RMSE_med)),
+  #                    breaks = seq(0, max(test$RMSE_med), 25)
   #                    ) +
+  # expand_limits(y = range_act) +
   coord_flip() +
   theme_bw() +
   theme(legend.position = "none")
@@ -5087,11 +5091,11 @@ rm(median_RMSE_by_model)
 ## Visualize Actual vs Models
 **NOTE: plotting is just for extrapolation data**  
   
-  Prepare the data.
+  Prepare the data by first getting all actuals and forecasts.
 ```{r}
 
 # function to munge the data
-get_forecast_data <-
+func_get_forecast_data <-
   function(el_stop_id) {
     data_assessment_list =
       map(.x = el_stop_id$splits,
@@ -5209,15 +5213,18 @@ get_forecast_data <-
   }
 
 
-# run the function for each url
+# run the function for each value of `el_stop_id`
 forecast_data_list <-
   add_el_stop_id %>% 
-  map(~ get_forecast_data(.x)
+  map(~ func_get_forecast_data(.x)
       )
 
+```
+  
+    
+  Now I munge the resulting data for plotting.
+```{r}
 
-
-# munge the resulting data for ploting
 forecast_data_to_plot_list <-
   forecast_data_list %>% 
   map(~ gather(.x,
@@ -5244,7 +5251,7 @@ rm(forecast_data_list)
 ```
   
     
-  Plot.
+  And here I create the plot itself.
 ```{r}
 
 clrs <- c("actual" = "black",
@@ -5299,7 +5306,7 @@ plot_actuals_vs_models <-
                               ) +
         # scale_size_manual(values = c(4, 1, 1, 1, 1)
         #                   ) +
-        scale_x_date(limits = c(max(.$el_date) - (7 * 3),
+        scale_x_date(limits = c(max(.$el_date) - (7 * 4),
                                 max(.$el_date) + (7 * 1)
                                 )
                      ) +
@@ -5311,98 +5318,368 @@ plot_actuals_vs_models <-
 plot_actuals_vs_models
 
 
-rm(clrs, lne_)
+rm(clrs, lne_, forecast_data_to_plot_list, func_get_forecast_data)
 
 ```
  
  
  
- 
- 
- 
+## Testing Out Modeling With H2O
 
-
-
-
-Loading the final dataset again.
-```{r}
-
-##  THINK ABOUT:
-
-  ## Lagging all divvy data by 21 days (including all "date"-related variables)
-
-  ## Removing data on `prcp` & `snow` (as we won't know that accurately in advance)
-  ## Modifying `tmax` & `tmin` to 10 degree F increments (as we're more likely to know that in advance than specific temperature readings)
-
-
-data_no_missing <-
-  readRDS(paste0(wd,
-                 "/Data/Interim/",
-                 "data_no_missing.Rds"
-                 )
-          )
-
-
-str(data_no_missing)
-
-```
-
-
+### All Variables
 
 ```{r}
 
+add_trn_val_test %>% 
+  map(~ group_by(.x,
+                 data_use_el_stop_id
+                 ) %>% 
+        summarise(date_min = min(el_date),
+                  date_max = max(el_date)
+                  )
+      )
 
 
-## Quick plot inspection
-common_el_stop <-
-  add_weather %>% 
-  group_by(el_stop_id) %>% 
-  summarise(rides_tot = sum(el_rides)
-            ) %>% 
-  top_n(n = 1, wt = rides_tot) %>% 
-  pull(el_stop_id)
+# One-Hot
+one_hot <-
+  add_trn_val_test %>% 
+  map(~ func_one_hot_vars(.x))
 
-add_weather %>% 
-  filter(el_stop_id == common_el_stop) %>% 
-  ggplot(aes(x = el_date,
-             y = el_rides
-             )
-         ) +
-  geom_line()
+# glimpse(add_trn_val_test$`40600`)
+# glimpse(one_hot$`40600`)
 
-rm(common_el_stop)
 
+# create train-val-test for h20
+train_tbl <-
+  one_hot %>% 
+  map(~ (filter(.x,
+                data_use_el_stop_id == "01_train"
+                )
+         )
+      )
+
+valid_tbl <-
+  one_hot %>% 
+  map(~ (filter(.x,
+                data_use_el_stop_id == "02_validation"
+                )
+         )
+      )
+
+test_tbl <-
+  one_hot %>% 
+  map(~ (filter(.x,
+                data_use_el_stop_id == "03_test"
+                )
+         )
+      )
+
+
+# Fire up h2o
+h2o.init()
+
+
+# Convert to H2OFrame objects
+train_h2o <- train_tbl %>% map(~ as.h2o(.x))
+valid_h2o <- valid_tbl %>% map(~ as.h2o(.x))
+test_h2o  <- test_tbl %>% map(~ as.h2o(.x))
+
+
+# Set names for h2o
+y <- "el_rides"
+x <- train_h2o %>% 
+  map(~ setdiff(names(.x),
+                y
+                )
+      )
+
+
+# linear regression model used, but can use any model
+# user   system  elapsed 
+#   32.875   29.217 1870.200 
+# ~ 31 min
+start <- proc.time()
+
+automl_models_h2o <-
+  pmap(.l = list(a = x,
+                 b = train_h2o,
+                 c = valid_h2o,
+                 d = test_h2o
+                 ),
+       .f = function(a, b, c, d) {
+         h2o.automl(
+           x = a,
+           y = y,
+           training_frame = b,
+           validation_frame = c,
+           leaderboard_frame = d,
+           nfolds = 13,
+           max_runtime_secs = 300,
+           stopping_metric = "deviance"
+           )
+         }
+       )
+
+time.h2o <- proc.time() - start
+rm(start)
+
+time.h2o
+
+# print(automl_models_h2o$`40600`@leaderboard)
+
+
+# Extract leader model
+automl_leader <-
+  pmap(.l = list(a = automl_models_h2o),
+       .f = function(a) {
+         ldr = a@leader
+         
+         return(ldr)
+         }
+       )
+
+
+# save the leader
+saveRDS(automl_leader,
+        paste0(wd,
+               "/Models/",
+               "automl_leader.Rds"
+               )
+        )
+
+
+# automl_leader <-
+#   readRDS(paste0(wd,
+#                  "/Models/",
+#                  "automl_leader.Rds"
+#                  )
+#           )
+
+
+# get predictions on test set
+pred_h2o <-
+  pmap(.l = list(a = automl_leader,
+                 b = test_h2o
+                 ),
+       .f = function(a, b) {
+         res = h2o.predict(a, newdata = b)
+         
+         return(res)
+         }
+       )
+
+
+# measure performance on test dataset
+perf <-
+  pmap(.l = list(a = automl_leader,
+                 b = test_h2o),
+       .f = function(a, b) {
+         per = h2o.performance(a, newdata = b)
+         
+         return(per)
+         }
+       )
+
+perf
+
+
+# save the leader performance
+saveRDS(perf,
+        paste0(wd,
+               "/Models/",
+               "perf.Rds"
+               )
+        )
 
 ```
 
 
-## Just inspecting the data to this point
+### Limited Variables
+
 ```{r}
 
-# message("distance_el_divvy_stations_dt")
-# str(distance_el_divvy_stations_dt)
-# 
-# message("divvy_trips_by_day")
-# str(divvy_trips_by_day)
-# 
-# message("divvy_trips_by_day_from")
-# str(divvy_trips_by_day_from)
-
-message("el_stns_full_dates_daily_stats_all")
-str(el_stns_full_dates_daily_stats_all)
+add_trn_val_test %>% 
+  map(~ group_by(.x,
+                 data_use_el_stop_id
+                 ) %>% 
+        summarise(date_min = min(el_date),
+                  date_max = max(el_date)
+                  )
+      )
 
 
-pmap(.l = list(a = names(rds_files),
-               b = rds_files
-               ),
-     .f = function(a, b) {
-       message(a)
-       
-       str(b)
-       }
-     )
+# One-Hot
+one_hot <-
+  add_trn_val_test %>% 
+  map(~ func_one_hot_vars(.x))
+
+# glimpse(add_trn_val_test$`40600`)
+# glimpse(one_hot$`40600`)
+
+
+# select specific columns to use
+col_names <-
+  DV_corr_predict %>% 
+  map(~ colnames(.x))
+
+
+select_cols <-
+  pmap(.l = list(a = one_hot,
+                 b = col_names
+                 ),
+       .f = function(a, b) {
+         res = a[, colnames(a) %in% b]
+         
+         return(res)
+         }
+       )
+
+# select_cols %>% map(~dim(.x))
+
+
+# create train-val-test for h20
+train_tbl <-
+  select_cols %>% 
+  map(~ (filter(.x,
+                data_use_el_stop_id == "01_train"
+                )
+         )
+      )
+
+valid_tbl <-
+  select_cols %>% 
+  map(~ (filter(.x,
+                data_use_el_stop_id == "02_validation"
+                )
+         )
+      )
+
+test_tbl <-
+  select_cols %>% 
+  map(~ (filter(.x,
+                data_use_el_stop_id == "03_test"
+                )
+         )
+      )
+
+
+# Fire up h2o
+h2o.init()
+
+
+# Convert to H2OFrame objects
+train_h2o <- train_tbl %>% map(~ as.h2o(.x))
+valid_h2o <- valid_tbl %>% map(~ as.h2o(.x))
+test_h2o  <- test_tbl %>% map(~ as.h2o(.x))
+
+
+# Set names for h2o
+y <- "el_rides"
+x <- train_h2o %>% 
+  map(~ setdiff(names(.x),
+                y
+                )
+      )
+
+
+# linear regression model used, but can use any model
+# user   system  elapsed 
+#   32.875   29.217 1870.200 
+# ~ 31 min
+start <- proc.time()
+
+automl_models_h2o_b <-
+  pmap(.l = list(a = x,
+                 b = train_h2o,
+                 c = valid_h2o,
+                 d = test_h2o
+                 ),
+       .f = function(a, b, c, d) {
+         h2o.automl(
+           x = a,
+           y = y,
+           training_frame = b,
+           validation_frame = c,
+           leaderboard_frame = d,
+           nfolds = 13,
+           max_runtime_secs = 300,
+           stopping_metric = "deviance"
+           )
+         }
+       )
+
+time.h2o_b <- proc.time() - start
+rm(start)
+
+time.h2o_b
+
+# print(automl_models_h2o$`40600`@leaderboard)
+
+
+# Extract leader model
+automl_leader_b <-
+  pmap(.l = list(a = automl_models_h2o_b),
+       .f = function(a) {
+         ldr = a@leader
+         
+         return(ldr)
+         }
+       )
+
+
+# save the leader
+saveRDS(automl_leader_b,
+        paste0(wd,
+               "/Models/",
+               "automl_leader_b.Rds"
+               )
+        )
+
+
+# automl_leader_b <-
+#   readRDS(paste0(wd,
+#                  "/Models/",
+#                  "automl_leader_b.Rds"
+#                  )
+#           )
+
+
+# get predictions on test set
+pred_h2o_b <-
+  pmap(.l = list(a = automl_leader_b,
+                 b = test_h2o
+                 ),
+       .f = function(a, b) {
+         res = h2o.predict(a, newdata = b)
+         
+         return(res)
+         }
+       )
+
+
+# measure performance on test dataset
+perf_b <-
+  pmap(.l = list(a = automl_leader_b,
+                 b = test_h2o),
+       .f = function(a, b) {
+         per = h2o.performance(a, newdata = b)
+         
+         return(per)
+         }
+       )
+
+perf_b
+
+
+# save the leader performance
+saveRDS(perf_b,
+        paste0(wd,
+               "/Models/",
+               "perf_b.Rds"
+               )
+        )
+
 
 ```
-
 
 
