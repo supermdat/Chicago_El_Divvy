@@ -2668,7 +2668,7 @@ DV_data <-
 glimpse(DV_data$`41140`)
 
 
-rm(func_one_hot_vars)
+# rm(func_one_hot_vars)
 
 ```
  
@@ -2930,7 +2930,6 @@ DV_Fit.Rf.corr_yes <-
                            "scale",
                            "medianImpute"
                            ),
-            # preProcess = c("nzv", "center", "scale", "medianImpute"),
             na.action = na.pass,
             method = "rf",
             metric = "RMSE",
@@ -2989,7 +2988,6 @@ DV_Fit.Rf.corr_no <-
                            "scale",
                            "medianImpute"
                            ),
-            # preProcess = c("nzv", "center", "scale", "medianImpute"),
             na.action = na.pass,
             method = "rf",
             metric = "RMSE",
@@ -3015,21 +3013,20 @@ stopCluster(cl)
 rm(start, tot_cores, cl)
 
 ```
-
   
     
   Compare the results.
 ```{r}
 
 # user  system elapsed 
-#  69.509   6.675 537.883 
-# ~ 9 min 
+#  61.039   5.166 527.512 
+# ~ 9 min
 message("time.Rf.corr_yes")
 time.Rf.corr_yes
 
 # user  system elapsed 
-#  45.860   2.914 514.294
-# ~ 9 min
+#  58.048   3.563 486.738
+# ~ 8 min
 message("time.Rf.corr_no")
 time.Rf.corr_no
 
@@ -3071,20 +3068,36 @@ Resample_Results.Rf %>%
   After inspecting the results, we choose to keep the model that includes the correlation filter in the preprocessing stage - the results and runtimes were similar.
 ```{r}
 
-rm(list = ls(pattern = "corr_no"))
+rm(list = ls(pattern = "corr_yes"))
 
 
-saveRDS(DV_Fit.Rf.corr_yes,
+saveRDS(DV_Fit.Rf.corr_no,
         paste0(wd,
-               "/Data_Processed/",
-               "DV_Fit.Rf.corr_yes.Rds"
+               "/Models/",
+               "DV_Fit.Rf.corr_no.Rds"
                )
         )
 
-# DV_Fit.Rf.corr_yes <-
+
+saveRDS(time.Rf.corr_no,
+        paste0(wd,
+               "/Models/",
+               "time.Rf.corr_no.Rds"
+               )
+        )
+
+
+# DV_Fit.Rf.corr_no <-
 #   readRDS(paste0(wd,
-#                  "/Data_Processed/",
-#                  "DV_Fit.Rf.corr_yes.Rds"
+#                  "/Models/",
+#                  "DV_Fit.Rf.corr_no.Rds"
+#                  )
+#           )
+
+# time.Rf.corr_no <-
+#   readRDS(paste0(wd,
+#                  "/Models/",
+#                  "time.Rf.corr_no.Rds"
 #                  )
 #           )
 
@@ -3163,7 +3176,6 @@ DV_Fit.Xgbtree.corr_yes <-
                            "scale",
                            "medianImpute"
                            ),
-            # preProcess = c("nzv", "center", "scale", "medianImpute"),
             na.action = na.pass,
             method = "xgbTree",
             metric = "RMSE",
@@ -3223,7 +3235,6 @@ DV_Fit.Xgbtree.corr_no <-
                            "scale",
                            "medianImpute"
                            ),
-            # preProcess = c("nzv", "center", "scale", "medianImpute"),
             na.action = na.pass,
             method = "xgbTree",
             metric = "RMSE",
@@ -3255,14 +3266,14 @@ rm(start, tot_cores, cl)
 ```{r}
 
 # user  system elapsed 
-#  14.295   5.260 419.687 
-# ~ 7 min 
+#  10.888   2.333 179.411
+# ~ 3 min 
 message("time.Xgbtree.corr_yes")
 time.Xgbtree.corr_yes
 
 # user  system elapsed 
-#  11.693   3.223 299.199
-# ~ 5 min
+#  10.377   2.360 201.333
+# ~ 3 min
 message("time.Xgbtree.corr_no")
 time.Xgbtree.corr_no
 
@@ -3309,15 +3320,30 @@ rm(list = ls(pattern = "corr_no"))
 
 saveRDS(DV_Fit.Xgbtree.corr_yes,
         paste0(wd,
-               "/Data_Processed/",
+               "/Models/",
                "DV_Fit.Xgbtree.corr_yes.Rds"
+               )
+        )
+
+
+saveRDS(time.Xgbtree.corr_yes,
+        paste0(wd,
+               "/Models/",
+               "time.Xgbtree.corr_yes.Rds"
                )
         )
 
 # DV_Fit.Xgbtree.corr_yes <-
 #   readRDS(paste0(wd,
-#                  "/Data_Processed/",
+#                  "/Models/",
 #                  "DV_Fit.Xgbtree.corr_yes.Rds"
+#                  )
+#           )
+
+# time.Xgbtree.corr_yes <-
+#   readRDS(paste0(wd,
+#                  "/Models/",
+#                  "time.Xgbtree.corr_yes.Rds"
 #                  )
 #           )
 
@@ -3349,9 +3375,1956 @@ rm(VI)
 ```
 
 
+### Rolling Resamples  
+  
+  This is based on the example shown [here](https://topepo.github.io/rsample/articles/Applications/Time_Series.html), and is needed for the time-series-ish models, which are not currently part of the `caret` modeling process.
+    
+  Create the rolling-origin resamples to be used for measuring forecast accuracy. Rolling samples will use 2 years of data do predict the next 14 days.  
+```{r}
+
+roll_rs <-
+  # DV_train_data %>% 
+  train_data %>% 
+  map(~ rolling_origin(.x,
+                       initial = period_train,
+                       assess = period_test,
+                       cumulative = FALSE,
+                       skip = skip_span
+                       )
+      )
 
 
-  Loading the final dataset again.
+message("DV_train_data")
+DV_train_data %>% 
+  map(~ nrow(.x)
+      )
+
+message("roll_rs")
+roll_rs %>% 
+  map(~ nrow(.x)
+      )
+
+
+names(roll_rs$`40600`)
+roll_rs$`40600`$splits[[1]]
+
+
+# rm(period_train, period_test, skip_span)
+
+```
+  
+    
+  For plotting, let’s index each split by the first day of the assessment set.
+```{r}
+
+get_date <-
+  function(x)
+    min(assessment(x)$el_date
+        )
+
+
+roll_rs <-
+  pmap(.l = list(a = roll_rs),
+       .f = function(a) {
+         data = a
+         
+         splits = data$splits %>% 
+           map(get_date)
+         
+         data$start_date = do.call("c", splits)
+         
+         return(data)
+         }
+       )
+
+names(roll_rs$`40600`)
+length(roll_rs$`40600`$start_date)
+head(roll_rs$`40600`$start_date, 20)
+
+
+rm(get_date)
+
+```
+
+
+
+### Model Setup (`forecast::auto.arima` and `prophet::prophet`)
+      
+  Here, we use `forecast::auto.arima` to produce create an arima model. We also try `prophet::prophet` to create a model based on trend, seasonality, and holidays, and that is a bit like a general additive model. More info can be found [here](https://facebook.github.io/prophet/) and [here](https://peerj.com/preprints/3190/).  
+    
+  First, I create the function for the basic ARIMA model.
+```{r}
+
+fit_model_arima <-
+  function(x, ...) {
+    # suggested by Matt Dancho:
+    data = x %>% 
+      # base = x %>% 
+      analysis() %>% 
+      # Since the first day changes over resamples, adjust it based on the first date value in the data frame
+      tk_ts(select = el_rides,
+            start = .$el_date[[1]] %>% lubridate::year(),
+            # freq = 365.25,
+            # freq = 365,
+            freq = 7,
+            silent = TRUE
+            )
+    
+    fit = auto.arima(data, ...)
+    
+    # fourier_trans = fourier(base, K = 7)
+    # 
+    # res = auto.arima(base,
+    #                  xreg = fourier_trans
+    #                  )
+    return(fit)
+    }
+
+
+# View(holiday_dates)
+# View(analysis(roll_rs$`ttb.gov/foia/frl.shtml`$splits[[1]]) %>% 
+#        left_join(holiday_dates,
+#                  by = c("date" = "ds")
+#                  ) %>% 
+#        mutate(holiday_binary = if_else(!is.na(holiday),
+#                                        1,
+#                                        0
+#                                        )
+#               )
+#      )
+# arima with fourier transformation and holidays in xreg
+
+```
+  
+    
+  Next I create the function to run an ARIMA model with external regressors (external regressors include fourier transformations, and other regressors identified by using the random forest and xgboost models used above).
+```{r}
+
+fit_model_arima_xreg <-
+  function(x, ...) {
+    # suggested by Matt Dancho:
+    data = 
+      x %>%
+      # models$`40600`$splits[[1]] %>% 
+      # base = x %>% 
+      analysis() %>% 
+      mutate(holiday_binary = if_else(holiday == FALSE,
+                                      0,
+                                      1
+                                      )
+             )
+    
+    # weekly frequency
+    ts_7 =
+      data %>% 
+      tk_ts(select = el_rides,
+            start = .$el_date[[1]] %>% lubridate::year(),
+            freq = 7,
+            silent = TRUE
+            )
+    
+    # yearly frequency
+    ts_365 =
+      data %>% 
+      tk_ts(select = el_rides,
+            start = .$el_date[[1]] %>% lubridate::year(),
+            # freq = 365.25,
+            freq = 365,
+            silent = TRUE
+            )
+    
+    # use a fourier transformation to capture daily seasonality and choose K programatically
+    bestfit = list(aicc = Inf)
+    for(K in seq(7)
+        ) {
+      n = nrow(assessment(x)
+               )
+      # n = nrow(assessment(models$`40600`$splits[[1]])
+      #          )
+      
+      ts_365_fourier = fourier(ts_365,
+                               K = K
+                               )
+      
+      ts_365_fourier_future = fourier(ts_365,
+                                      K = K,
+                                      h = n
+                                      )
+      
+      fit = auto.arima(ts_7,
+                       xreg = cbind(ts_365_fourier,
+                                    data$holiday_binary,
+                                    data$year,
+                                    data$half,
+                                    data$quarter,
+                                    data$month,
+                                    data$mweek,
+                                    data$wday.lbl,
+                                    data$el_rides_l07,
+                                    data$el_rides_l14,
+                                    data$el_rides_l21,
+                                    data$el_rides_l28,
+                                    data$el_rides_ma07,
+                                    data$el_rides_ma14,
+                                    data$el_rides_ma21,
+                                    data$el_rides_ma28#,
+                                    # data$divvy_pt5mi_stn_cnt,
+                                    # data$divvy_mindist_miles,
+                                    # data$tmin_bands,
+                                    # data$tmax_bands
+                                    
+                                    # data$pageview_sum_lag21,
+                                    # data$pageview_sum_lag28,
+                                    # data$bounces_sum_lag21,
+                                    # data$bounces_sum_lag28,
+                                    # data$timeOnPage_sum21,
+                                    # data$timeOnPage_sum28,
+                                    # data$avgTimeOnPage_avg_lag21,
+                                    # data$avgTimeOnPage_avg_lag28
+                                    ),
+                       # seasonal = FALSE
+                       )
+      
+      if(fit[["aicc"]] < bestfit[["aicc"]]) {
+        bestfit = fit
+        bestK = K
+        bestts_365_fourier_future = ts_365_fourier_future
+      }
+      
+      return(list(best_fit = bestfit,
+                  best_k = bestK,
+                  best_ts_365_fourier_future = bestts_365_fourier_future
+                  )
+             )
+    }
+    
+    return()
+    }
+
+```
+  
+    
+  Now I create the function to run the basic prophet model (based just on `el_rides`.
+```{r}
+
+# prophet
+fit_model_prophet <-
+  function(x, ...) {
+    # suggested by Matt Dancho:
+    x %>% 
+      analysis() %>% 
+      # Since the first day changes over resamples, adjust it based on the first date value in the data frame
+      # tk_ts(select = pageview_sum,
+      #       start = .$date[[1]] %>% lubridate::year(),
+      #       freq = 365.25,
+      #       silent = TRUE
+      #       ) %>% 
+      select(el_date,
+             el_rides
+             ) %>% 
+      rename(ds = el_date,
+             y = el_rides
+             ) %>% 
+      prophet(...)
+  }
+
+```
+
+
+### Run Models
+
+#### Arima-Based Model  
+  **Need to review this:**  [http://www.business-science.io/code-tools/2018/04/08/introducing-anomalize.html](http://www.business-science.io/code-tools/2018/04/08/introducing-anomalize.html) for anomaly detection.
+    
+  Can also use any other modeling methods (e.g., prophet), and then use the outlier detection method twitter used (Generalized ESD) on the remainder. **See:**  [https://www.rdocumentation.org/packages/EnvStats/versions/2.3.0/topics/rosnerTest](https://www.rdocumentation.org/packages/EnvStats/versions/2.3.0/topics/rosnerTest) for the algorithm used outside of `AnomalyDetection::AnomalyDetectionTs`.  
+    
+  Here I run the basic `forecast::auto.arima` model.
+```{r}
+
+# user   system  elapsed 
+# 1001.467   21.414 1036.904
+# ~ 17 min
+message("arima")
+start <- proc.time()
+models <-
+  pmap(.l = list(a = roll_rs),
+       .f = function(a) {
+         
+         splits_a = a$splits %>%
+           map(fit_model_arima)
+         
+         a$arima = splits_a
+         
+         return(a)
+         }
+       )
+
+time.arima <- proc.time() - start
+time.arima
+
+```
+  
+    
+  Here I run the `forecast::auto.arima` model with external regressors.
+```{r}
+ 
+# user  system elapsed 
+# 626.467  26.937 673.471
+# ~ 11 min
+message("arima_xreg")
+start <- proc.time()
+models <-
+  pmap(.l = list(a = models),
+       .f = function(a) {
+         
+         splits_a_xreg = a$splits %>% 
+           map(fit_model_arima_xreg)
+         
+         a$arima_xreg = splits_a_xreg
+         
+         return(a)
+         }
+       )
+
+time.arima_xreg <- proc.time() - start
+time.arima_xreg
+
+```
+  
+    
+  Here I run the basic `prophet::prophet` model
+```{r}
+
+# user  system elapsed 
+#  12.007   1.344  13.901
+message("prophet")
+start <- proc.time()
+models <-
+  pmap(.l = list(a = models),
+       .f = function(a) {
+         
+         splits_p = a$splits %>%
+           map(fit_model_prophet)
+         
+         a$prophet = splits_p
+         
+         return(a)
+         }
+       )
+
+time.prophet <- proc.time() - start
+time.prophet
+
+```
+  
+    
+  Here I run the `prophet::prophet` model that includes regressors for holidays.
+```{r}
+
+# create the holiday_dates
+holiday_dates <-
+  add_trn_val_test %>% 
+  map(~ select(.x,
+               holiday_name,
+               el_date
+               ) %>% 
+        filter(holiday_name != "--Not_Holiday--") %>% 
+        rename(holiday = holiday_name,
+               ds = el_date
+               )
+      )
+
+holiday_dates <- bind_rows(holiday_dates) %>% 
+  select(holiday,
+         ds
+         ) %>% 
+  distinct() %>% 
+  arrange(ds)
+
+
+# user  system elapsed 
+#  35.327   3.401  47.577
+message("prophet_hol")
+start <- proc.time()
+models <-
+  pmap(.l = list(a = models),
+       .f = function(a) {
+         
+         splits_p_hol = a$splits %>%
+           map(~ fit_model_prophet(.x,
+                                   holidays = holiday_dates
+                                   )
+               )
+           
+         a$prophet_hol <- splits_p_hol
+         
+         return(a)
+         }
+       )
+
+time.prophet_hol <- proc.time() - start
+time.prophet_hol
+
+
+# rm(holiday_dates)
+
+```
+
+
+
+```{r}
+
+run_times <- list(arima = as.list(time.arima),
+                  arima_xreg = as.list(time.arima_xreg),
+                  prophet = as.list(time.prophet),
+                  prophet_hol = as.list(time.prophet_hol)
+                  )
+
+run_times
+
+
+# saving is done to avoid having to run the models again
+saveRDS(models,
+        paste0(wd,
+               "/Models/",
+               "models.Rds"
+               )
+        )
+
+# models <-
+#   readRDS(paste0(wd,
+#                  "/Data_Processed/",
+#                  "models.Rds"
+#                  )
+#           )
+
+
+# names(models)
+# names(models$`ttb.gov/foia/frl.shtml`)
+# names(models$`ttb.gov/foia/frl.shtml`$arima_xreg[[10]])
+# nrow(models$`ttb.gov/foia/frl.shtml`$arima_xreg[[10]]$best_ts_365_fourier_future)
+# models$`ttb.gov/foia/frl.shtml`$arima_xreg[[10]]$best_fit
+# 
+# str(models$`ttb.gov/foia/frl.shtml`$splits[[3]])
+
+
+
+# rm(roll_rs)
+# rm(time.arima, time.arima_xreg, time.prophet, time.prophet_hol)
+
+```
+  
+    
+  Create the `Prophet` forecasts and plots - these will be used for measuring model accuracy (below). Here I creat the future prophet dataset.
+```{r}
+
+# Dataframe for future dates
+prophet.future <-
+  pmap(.l = list(a = models),
+       .f = function(a) {
+         splits_p_future =
+           a$prophet %>% 
+           map(make_future_dataframe,
+               periods = 365
+               )
+         
+         splits_p_hol_future =
+           a$prophet_hol %>% 
+           map(make_future_dataframe,
+               periods = 365
+               )
+         
+         a$prophet.future <- splits_p_future
+         a$prophet_hol.future <- splits_p_hol_future
+         
+         return(a)
+         }
+       )
+
+length(prophet.future$`40600`$prophet.future)
+length(prophet.future$`40600`$prophet_hol.future)
+# prophet.future$`40600`$prophet.future[[10]]
+# prophet.future$`40600`$prophet_hol.future[[10]]
+
+```  
+  
+    
+  And now I can create the prohpet forecasts. First, the basic prophet forecast.
+```{r}
+
+# user  system elapsed 
+# 220.704  21.132 242.524
+# ~ 4 min
+start <- proc.time()
+prophet.forecast <-
+  pmap(.l = list(a = prophet.future),
+       .f = function(a) {
+         splits_p_m =
+           a$prophet
+         
+         splits_p_future =
+           a$prophet.future
+         
+         splits_p_forecast =
+           pmap(.l = list(b = splits_p_m,
+                          c = splits_p_future
+                          ),
+                .f = function(b, c) {
+                  predict(b, c) %>% 
+                    # if_else is needed to prevent negative predictions
+                    mutate(yhat_zero_floor = if_else(yhat < 0,
+                                                     0,
+                                                     yhat
+                                                     )
+                           )
+                  }
+                )
+         
+         a$prophet.forecast = splits_p_forecast
+         
+         return(a)
+         }
+       )
+
+time.prophet.forecast <- proc.time() - start
+time.prophet.forecast
+
+```
+  
+    
+  And now the prophet forecast including holidays.
+```{r}
+
+# user  system elapsed 
+# 792.629  78.698 881.271
+# ~ 15 min
+start <- proc.time()
+prophet.forecast <-
+  pmap(.l = list(a = prophet.forecast),
+       .f = function(a) {
+         splits_p_hol_m =
+           a$prophet_hol
+         
+         splits_p_hol_future =
+           a$prophet_hol.future
+         
+         splits_p_hol_forecast =
+           pmap(.l = list(b = splits_p_hol_m,
+                          c = splits_p_hol_future
+                          ),
+                .f = function(b, c) {
+                  predict(b, c) %>% 
+                    # if_else is needed to prevent negative predictions
+                    mutate(yhat_zero_floor = if_else(yhat < 0,
+                                                     0,
+                                                     yhat
+                                                     )
+                           )
+                  }
+                )
+         
+         a$prophet_hol.forecast = splits_p_hol_forecast
+         
+         return(a)
+         }
+       )
+
+time.prophet_hol.forecast <- proc.time() - start
+time.prophet_hol.forecast
+
+```
+  
+    
+  Now I simply update the `run_times` dataset with the relevant prophet info, and the relvant info from the random forest and xgboost models.
+```{r}
+
+
+run_times[5:6] <-
+  list(prophet.forecast = as.list(time.prophet.forecast),
+       prophet_hol.forecast = as.list(time.prophet_hol.forecast)
+       )
+
+names(run_times)[5:6] <- c("prophet.forecast", "prophet_hol.forecast")
+
+run_times[7:8] <-
+  list(rf_corr_no = as.list(time.Rf.corr_no),
+       xgbtree_corr_yes = as.list(time.Xgbtree.corr_yes)
+       )
+  
+names(run_times)[7:8] <- c("rf_corr_no", "xgbtree_corr_yes")
+
+
+str(run_times)
+
+
+# saving is done to avoid having to run the forecasts again
+saveRDS(run_times,
+        paste0(wd,
+               "/Models/",
+               "run_times.Rds"
+               )
+        )
+
+# run_times <-
+#   readRDS(paste0(wd,
+#                  "/Models/",
+#                  "run_times.Rds"
+#                  )
+#           )
+
+
+rm(time.Rf.corr_no, time.Xgbtree.corr_yes)
+
+```
+  
+    
+  And now I can create the prophet plots.
+```{r}
+
+prophet.plots <-
+  pmap(.l = list(a = prophet.forecast),
+       .f = function(a) {
+         splits_p_m =
+           a$prophet
+         
+         splits_p_hol_m =
+           a$prophet_hol
+         
+         splits_p_forecast =
+           a$prophet.forecast
+         
+         splits_p_hol_forecast =
+           a$prophet_hol.forecast
+         
+         
+         splits_p_plots =
+           pmap(.l = list(b = splits_p_m,
+                          c = splits_p_forecast
+                          ),
+                .f = function(b, c) {
+                  plot(b, c)
+                  }
+                )
+         
+         splits_p_hol_plots =
+           pmap(.l = list(b = splits_p_hol_m,
+                          c = splits_p_hol_forecast
+                          ),
+                .f = function(b, c) {
+                  plot(b, c)
+                  }
+                )
+         
+         
+         a$prophet.plots <- splits_p_plots
+         a$prophet_hol.plots <- splits_p_hol_plots
+         
+         return(a)
+         }
+       )
+
+# saving is done to avoid having to run the forecasts again
+saveRDS(prophet.plots,
+        paste0(wd,
+               "/Models/",
+               "prophet.plots.Rds"
+               )
+        )
+
+# prophet.plots <-
+#   readRDS(paste0(wd,
+#                  "/Models/",
+#                  "prophet.plots.Rds"
+#                  )
+#           )
+
+
+names(prophet.plots)
+names(prophet.plots$`40600`)
+length(prophet.plots$`40600`$prophet.plots)
+length(prophet.plots$`40600`$prophet_hol.plots)
+
+message("prophet")
+pmap(.l = list(a = prophet.plots
+               ),
+     .f = function(a, b) {
+       dat = a
+       
+       dat$prophet.plots[[10]]
+       }
+     )
+
+message("prophet_hol")
+pmap(.l = list(a = prophet.plots
+               ),
+     .f = function(a, b) {
+       dat = a
+       
+       dat$prophet_hol.plots[[10]]
+       
+       }
+     )
+
+# prophet.plots$`40600`$prophet.plots[[10]]
+# prophet.plots$`40600`$prophet_hol.plots[[10]]
+# prophet.plots$`40600`$prophet[[10]]
+# prophet.plots$`40600`$prophet_hol[[10]]
+
+
+# rm(models, prophet.future, prophet.forecast, time.prophet.forecast, time.prophet_hol.forecast, start)
+
+```
+
+
+## Accuracy Measurements  
+    
+  Now we can check some summary (RMSE) statistics. **NOTE: these are summary statistics based on the data used to build the models.**  
+    
+### Interpolation - ARIMA Model
+```{r}
+
+accuracy_interp_arima <-
+  pmap(.l = list(a = prophet.plots),
+       .f = function(a) {
+           
+         interp_a =
+           map_dbl(a$arima,
+                   function(x) 
+                     sw_glance(x)[["RMSE"]]
+                   )
+         
+         interp_a_xreg =
+           map_dbl(a$arima_xreg,
+                   function(x) {
+                     y = x$best_fit %>% 
+                       sw_glance()
+                     
+                     y[["RMSE"]]
+                     }
+                   )
+         
+         a$arima.interpolation = interp_a
+         a$arima_xreg.interpolation = interp_a_xreg
+         
+         return(a)
+         }
+       )
+
+
+names(accuracy_interp_arima$`40600`)
+accuracy_interp_arima$`40600`$arima.interpolation
+accuracy_interp_arima$`40600`$arima_xreg.interpolation
+
+message("arima.interpolation")
+accuracy_interp_arima %>% 
+  map(~ summary(.x$arima.interpolation)
+      )
+
+message("arima_xreg.interpolation")
+accuracy_interp_arima %>% 
+  map(~ summary(.x$arima_xreg.interpolation)
+      )
+
+
+rm(prophet.plots)
+
+```
+
+
+### Interpolation - Prophet Model
+```{r}
+
+get_interp_prophet <- function(split, pf) {
+  # Get analysis data
+  pred_dat =
+    analysis(split) %>% 
+    select(el_date,
+           el_rides
+         ) %>% 
+    left_join(select(pf,
+                     ds,
+                     yhat,
+                     yhat_zero_floor
+                     ) %>% 
+                mutate_at(vars(ds), as.Date),
+              by = c("el_date" = "ds")
+            ) %>% 
+    # mutate(pct_error = (el_rides - yhat_zero_floor) / el_rides * 100
+    #        ) %>% 
+    mutate(sqrd_error = (el_rides - yhat_zero_floor)^2
+           ) %>% 
+    arrange(el_date)
+  
+  # mean(abs(pred_dat$pct_error)
+  #      )
+  sqrt(mean(pred_dat$sqrd_error,
+            na.rm = TRUE
+            )
+       )
+  }    
+  
+
+accuracy_interp_prophet <-
+  pmap(.l = list(a = accuracy_interp_arima),
+       .f = function(a) {
+         interp =
+           map2_dbl(a$splits,
+                    a$prophet.forecast,
+                    get_interp_prophet
+                    )
+         
+         interp_hol =
+           map2_dbl(a$splits,
+                    a$prophet_hol.forecast,
+                    get_interp_prophet
+                    )
+         
+         a$prophet.interpolation = interp
+         
+         a$prophet_hol.interpolation = interp_hol
+         
+         return(a)
+         }
+       )
+
+
+names(accuracy_interp_prophet$`40600`)
+accuracy_interp_prophet$`40600`$prophet.interpolation
+accuracy_interp_prophet$`40600`$prophet_hol.interpolation
+
+message("prophet.interpolation")
+accuracy_interp_prophet %>% 
+  map(~ summary(.x$prophet.interpolation)
+      )
+
+message("prophet_hol.interpolation")
+accuracy_interp_prophet %>% 
+  map(~ summary(.x$prophet_hol.interpolation)
+      )
+
+
+# saving is done to avoid having to run the models again
+saveRDS(accuracy_interp_prophet,
+        paste0(wd,
+               "/Models/",
+               "accuracy_interp_prophet.Rds"
+               )
+        )
+
+# accuracy_interp_prophet <-
+#   readRDS(paste0(wd,
+#                  "/Models/",
+#                  "accuracy_interp_prophet.Rds"
+#                  )
+#           )
+
+
+rm(accuracy_interp_arima)
+
+```
+
+
+
+### Forecast & Interpolation - Random Forest Model  
+  
+  First, add the info of the Random Forest and the Xgboost model to the "base" list file.
+```{r}
+
+# test <-
+#   accuracy_interp_prophet
+# 
+# x <- DV_Fit.Rf.corr_yes$`ttb.gov/foia/frl.shtml`
+# as.tibble(x)
+# 
+# names(test$`ttb.gov/foia/frl.shtml`)
+# test$`ttb.gov/foia/frl.shtml`$rf <- as.list(x)
+# test$`ttb.gov/foia/frl.shtml`$rf[[1]] <- x
+# 
+# test_2 <-
+#   pmap(.l = list(a = test,
+#                  b = DV_Fit.Rf.corr_yes,
+#                  c = DV_Fit.Xgbtree.corr_yes
+#                  ),
+#        .f = function(a, b, c) {
+#          a$rf = b
+#          a$xgb = c
+#          
+#          return(a)
+#          }
+#        )
+# 
+# names(test_2)
+
+```
+  
+    
+  Get the forecasted data for the random forest and the xgboost tree.  
+    
+  First, I create a function to get the error percentages.
+```{r}
+
+get_pct_error <-
+  function(base, mod) {
+    data = bind_cols(base,
+                     mod
+                     ) %>% 
+      select(el_date,
+             el_rides,
+             yhat
+             ) %>%
+      rename(y = el_rides
+             ) %>%
+      # if_else is needed to prevent negative predictions
+      mutate(yhat_zero_floor = if_else(yhat < 0,
+                                       0,
+                                       yhat
+                                       ),
+             # pct_error = (y - yhat_zero_floor) / y * 100,
+             sqrd_error = (y - yhat_zero_floor)^2
+             ) %>%
+      arrange(el_date)
+    
+    return(data)
+    }
+
+```
+  
+    
+  Now I get the forecasts of all ML models as one list.
+```{r}
+
+rf_xgb_forecasts_combined <-
+  pmap(.l = list(a = accuracy_interp_prophet,
+                 b = DV_Fit.Rf.corr_no,
+                 c = DV_Fit.Xgbtree.corr_yes
+                 ),
+       .f = function(a, b, c) {
+         splits = a$splits
+         rf = b
+         xgb = c
+         
+         fcast =
+           pmap(.l = list(d = splits),
+                .f = function(d) {
+                  # prep the data
+                  analysis_assessment =
+                    analysis(d) %>% 
+                    mutate(type = "interpolation") %>% 
+                    bind_rows(assessment(d) %>% 
+                                mutate(type = "extrapolation")
+                              )
+                  
+                  one_hot =
+                    analysis_assessment %>% 
+                    func_one_hot_vars()
+                  
+                  one_hot_interp =
+                    one_hot %>% 
+                    filter(typeinterpolation == 1) %>% 
+                    select(-typeinterpolation,
+                           -typeextrapolation
+                           )
+                  
+                  one_hot_extrap = 
+                    one_hot %>% 
+                    filter(typeextrapolation == 1) %>% 
+                    select(-typeinterpolation,
+                           -typeextrapolation
+                           )
+                  
+                  complete_interp =
+                    one_hot_interp[complete.cases(one_hot_interp), ]
+                  
+                  complete_extrap =
+                    one_hot_extrap[complete.cases(one_hot_extrap), ]
+                  
+                  
+                  # predictions
+                  pred_rf.interp =
+                    predict(rf,
+                            newdata = complete_interp
+                            ) %>% 
+                    as.data.frame()
+                  
+                  names(pred_rf.interp) <- "yhat"
+                  
+                  pred_rf.extrap =
+                    predict(rf,
+                            newdata = complete_extrap
+                            ) %>% 
+                    as.data.frame()
+                  
+                  names(pred_rf.extrap) <- "yhat"
+                  
+                  
+                  pred_xgb.interp =
+                    predict(xgb,
+                            newdata = complete_interp
+                            ) %>% 
+                    as.data.frame()
+                  
+                  names(pred_xgb.interp) <- "yhat"
+                  
+                  pred_xgb.extrap =
+                    predict(xgb,
+                            newdata = complete_extrap
+                            ) %>% 
+                    as.data.frame()
+                  
+                  names(pred_xgb.extrap) <- "yhat"
+                  
+                  
+                  # add percent errors
+                  full_pred.rf.interp =
+                    get_pct_error(base = complete_interp,
+                                  mod = pred_rf.interp
+                                  )
+                  
+                  full_pred.rf.extrap =
+                    get_pct_error(base = complete_extrap,
+                                  mod = pred_rf.extrap
+                                  )
+                  
+                  
+                  full_pred.xgb.interp =
+                    get_pct_error(base = complete_interp,
+                                  mod = pred_xgb.interp
+                                  )
+                  
+                  full_pred.xgb.extrap =
+                    get_pct_error(base = complete_extrap,
+                                  mod = pred_xgb.extrap
+                                  )
+                  
+                  
+                  # result as a list
+                  full_pred_list =
+                    list(pred.rf.interp = full_pred.rf.interp,
+                         pred.rf.extrap = full_pred.rf.extrap,
+                         pred.xgb.interp = full_pred.xgb.interp,
+                         pred.xgb.extrap = full_pred.xgb.extrap
+                         )
+                  
+                  # return value
+                  return(full_pred_list)
+                  }
+                )
+         
+         a$ml_forecasts_all = fcast
+         
+         return(a)
+         }
+       )
+
+names(rf_xgb_forecasts_combined$`40600`)
+
+```
+  
+    
+  Now I separate the forecats into their own dataframes.
+```{r}
+
+rf_xgb_forecasts_individualized <-
+  pmap(.l = list(a = rf_xgb_forecasts_combined),
+       .f = function(a) {
+         fc = a$ml_forecasts_all
+
+         # limit results to the relevant model
+         result.rf.interp =
+           pmap(.l = list(b = fc),
+              .f = function(b) {
+                b$pred.rf.interp
+                }
+              )
+         
+         result.rf.extrap =
+           pmap(.l = list(b = fc),
+              .f = function(b) {
+                b$pred.rf.extrap
+                }
+              )
+         
+         result.xgb.interp =
+           pmap(.l = list(b = fc),
+              .f = function(b) {
+                b$pred.xgb.interp
+                }
+              )
+         
+         result.xgb.extrap =
+           pmap(.l = list(b = fc),
+              .f = function(b) {
+                b$pred.xgb.extrap
+                }
+              )
+         
+         a$rf.forecast_interp <- result.rf.interp
+         a$rf.forecast_extrap <- result.rf.extrap
+         a$xgb.forecast_interp <- result.xgb.interp
+         a$xgb.forecast_extrap <- result.xgb.extrap
+         
+         # remove no longer needed list of all forecasts
+         a$ml_forecasts_all <- NULL
+         
+         return(a)
+         }
+       )
+
+
+names(rf_xgb_forecasts_individualized$`40600`)
+# rf_xgb_forecasts_individualized$`40600`$rf.forecast_interp[[13]]
+# rf_xgb_forecasts_individualized$`40600`$xgb.forecast_extrap[[13]]
+
+
+rm(accuracy_interp_prophet, rf_xgb_forecasts_combined)
+
+```
+  
+    
+  Now I calculate the interpolation and extrapolation accuracy stats.
+```{r}
+
+# function to get the RMSE value
+get_interp_ML <- function(ML.fcast) {
+  pred_dat = ML.fcast
+  
+  # mean(abs(pred_dat$pct_error)
+  #      )
+  sqrt(mean(pred_dat$sqrd_error,
+            na.rm = TRUE
+            )
+       )
+  }
+
+
+accuracy_interp_ML <-
+  pmap(.l = list(a = rf_xgb_forecasts_individualized),
+       .f = function(a) {
+         interp.rf =
+           map_dbl(a$rf.forecast_interp,
+                   get_interp_ML
+                   )
+         
+         extrap.rf =
+           map_dbl(a$rf.forecast_extrap,
+                   get_interp_ML
+                   )
+         
+         interp.xgb =
+           map_dbl(a$xgb.forecast_interp,
+                   get_interp_ML
+                   )
+         
+         extrap.xgb =
+           map_dbl(a$xgb.forecast_extrap,
+                   get_interp_ML
+                   )
+         
+         a$rf.interpolation <- interp.rf
+         a$rf.extrapolation <- extrap.rf
+         a$xgb.interpolation <- interp.xgb
+         a$xgb.extrapolation <- extrap.xgb
+         
+         return(a)
+         }
+       )
+
+
+names(accuracy_interp_ML$`40600`)
+# accuracy_interp_ML$`40600`$rf_forecast[[13]]
+accuracy_interp_ML$`40600`$rf.interpolation
+accuracy_interp_ML$`40600`$rf.extrapolation
+
+
+message("rf.interpolation")
+accuracy_interp_ML %>% 
+  map(~ summary(.x$rf.interpolation)
+      )
+
+message("rf.extrapolation")
+accuracy_interp_ML %>% 
+  map(~ summary(.x$rf.extrapolation)
+      )
+
+message("xgb.interpolation")
+accuracy_interp_ML %>% 
+  map(~ summary(.x$xgb.interpolation)
+      )
+
+message("xgb.extrapolation")
+accuracy_interp_ML %>% 
+  map(~ summary(.x$xgb.extrapolation)
+      )
+
+
+# saving is done to avoid having to run the models again
+saveRDS(accuracy_interp_ML,
+        paste0(wd,
+               "/Models/",
+               "accuracy_interp_ML.Rds"
+               )
+        )
+
+# accuracy_interp_ML <-
+#   readRDS(paste0(wd,
+#                  "/Models/",
+#                  "accuracy_interp_ML.Rds"
+#                  )
+#           )
+
+
+rm(rf_xgb_forecasts_individualized)
+
+```
+  
+    
+  Now we can check some summary (MAPE) statistics. **NOTE: these are summary statistics based on the data NOT used to build the models.**  
+    
+### Extrapolation - ARIMA Model  
+  
+  Function to get the ARIMA predictions.
+```{r}
+
+get_pred_arima <- function(split, mod) {
+  n <- nrow(assessment(split)
+            )
+  # Get assessment data
+  pred_dat <-
+    assessment(split) %>%
+    mutate(pred = as.vector(forecast(mod, h = n)$mean),
+           # if_else is used to put a floor of 0 (zero) for the prediction
+           pred_zero_floor = if_else(pred < 0,
+                                     0,
+                                     pred
+                                     ),
+           # pct_error = (el_rides - pred_zero_floor) / el_rides * 100,
+           sqrd_error = (el_rides - pred_zero_floor)^2
+           )
+  
+  return(pred_dat)
+  }
+
+```
+  
+    
+  Function to calculate the extrapolation stats
+```{r}
+
+get_extrap_arima <- function(arima.fcast) {
+  pred_dat = arima.fcast
+  
+  # mean(abs(pred_dat$pct_error)
+  #      )
+  sqrt(mean(pred_dat$sqrd_error,
+            na.rm = TRUE
+            )
+       )
+  }
+
+```
+  
+    
+  Run the the forecast and extrapolation functions.
+```{r}
+
+
+accuracy_extrap_arima <-
+  pmap(.l = list(a = accuracy_interp_ML),
+       .f = function(a) {
+         pred =
+           map2(a$splits,
+                a$arima,
+                get_pred_arima
+               )
+         
+         a$arima.forecast <- pred
+         
+         return(a)
+         }
+       )
+
+
+accuracy_extrap_arima <-
+  pmap(.l = list(a = accuracy_extrap_arima),
+       .f = function(a) {
+         extrap <-
+           map_dbl(a$arima.forecast,
+                   get_extrap_arima
+                   )
+         
+         a$arima.extrapolation <- extrap
+         
+         return(a)
+         }
+       )
+
+names(accuracy_extrap_arima$`40600`)
+# accuracy_extrap_arima$`40600`$arima.forecast[[13]]
+accuracy_extrap_arima$`40600`$arima.extrapolation
+
+accuracy_extrap_arima %>% 
+  map(~ summary(.x$arima.extrapolation)
+      )
+
+
+rm(accuracy_interp_ML)
+
+```
+
+
+### Extrapolation - ARIMA Model with XREG  
+  
+  Function to get the forecasts from the ARIMA XREG models. 
+```{r}
+
+get_pred_arima_xreg <-
+  function(split, mod) {
+    n = nrow(assessment(split)
+             )
+    
+    data_og =
+      split %>% 
+      assessment %>% 
+      mutate(holiday_binary = if_else(holiday == FALSE,
+                                      0,
+                                      1
+                                      )
+             )
+    
+    data_pred =
+      data_og %>% 
+      mutate(pred = as.vector(forecast(mod$best_fit,
+                                       xreg = cbind(mod$best_ts_365_fourier_future,
+                                                    data_og$holiday_binary,
+                                                    data_og$year,
+                                                    data_og$half,
+                                                    data_og$quarter,
+                                                    data_og$month,
+                                                    data_og$mweek,
+                                                    data_og$wday.lbl,
+                                                    data_og$el_rides_l07,
+                                                    data_og$el_rides_l14,
+                                                    data_og$el_rides_l21,
+                                                    data_og$el_rides_l28,
+                                                    data_og$el_rides_ma07,
+                                                    data_og$el_rides_ma14,
+                                                    data_og$el_rides_ma21,
+                                                    data_og$el_rides_ma28#,
+                                                    # data_og$divvy_pt5mi_stn_cnt,
+                                                    # data_og$divvy_mindist_miles,
+                                                    # data_og$tmin_bands,
+                                                    # data_og$tmax_bands
+                                                    
+                                                    # data_og$pageview_sum_lag21,
+                                                    # data_og$pageview_sum_lag28,
+                                                    # data_og$bounces_sum_lag21,
+                                                    # data_og$bounces_sum_lag28,
+                                                    # data_og$timeOnPage_sum21,
+                                                    # data_og$timeOnPage_sum28,
+                                                    # data_og$avgTimeOnPage_avg_lag21,
+                                                    # data_og$avgTimeOnPage_avg_lag28
+                                    ),
+                                       h = n
+                                       )$mean
+                              ),
+             # if_else is used to put a floor of 0 (zero) for the prediction
+             pred_zero_floor = if_else(pred < 0,
+                                       0,
+                                       pred
+                                       ),
+             # pct_error = (el_rides - pred_zero_floor) / el_rides * 100
+             sqrd_error = (el_rides - pred_zero_floor)^2
+             )
+    }
+
+```
+  
+    
+  Function to calculate the extrapolation stats.
+```{r}
+
+get_extrap_arima_xreg <-
+  function(arima.fcast) {
+    pred_dat = arima.fcast
+    
+    # mean(abs(pred_dat$pct_error)
+    #      )
+    sqrt(mean(pred_dat$sqrd_error,
+              na.rm = TRUE
+              )
+         )
+    }
+
+```
+  
+    
+  Run the forecast and extrapolation functions.
+```{r}
+
+accuracy_extrap_arima_xreg <-
+  pmap(.l = list(a = accuracy_extrap_arima),
+       .f = function(a) {
+         pred <-
+           map2(a$splits,
+                a$arima_xreg,
+                get_pred_arima_xreg
+               )
+         
+         a$arima_xreg.forecast <- pred
+         
+         return(a)
+         }
+       )
+
+
+accuracy_extrap_arima_xreg <-
+  pmap(.l = list(a = accuracy_extrap_arima_xreg),
+       .f = function(a) {
+         extrap <-
+           map_dbl(a$arima_xreg.forecast,
+                   get_extrap_arima
+                   )
+         
+         a$arima_xreg.extrapolation <- extrap
+         
+         return(a)
+         }
+       )
+
+names(accuracy_extrap_arima_xreg$`40600`)
+# accuracy_extrap_arima_xreg$`40600`$arima_xreg.forecast[[13]]
+accuracy_extrap_arima_xreg$`40600`$arima_xreg.extrapolation
+
+accuracy_extrap_arima_xreg %>% 
+  map(~ summary(.x$arima_xreg.extrapolation)
+      )
+
+
+rm(accuracy_extrap_arima)
+
+
+```
+
+
+### Extrapolation - Prophet Model  
+  
+  Function to get the extrapolation stats.
+```{r}
+
+get_extrap_prophet <- function(split, pf) {
+  # Get assessment data
+  pred_dat <-
+    assessment(split) %>% 
+    select(el_date,
+           el_rides
+         ) %>% 
+    left_join(select(pf,
+                     ds,
+                     yhat,
+                     yhat_zero_floor
+                     ) %>% 
+                mutate_at(vars(ds), as.Date),
+              by = c("el_date" = "ds")
+            ) %>% 
+    mutate(#pct_error = (el_rides - yhat_zero_floor) / el_rides * 100,
+           sqrd_error = (el_rides - yhat_zero_floor)^2 
+           ) %>% 
+    arrange(el_date)
+  
+  # mean(abs(pred_dat$pct_error)
+  #      )
+  sqrt(mean(pred_dat$sqrd_error,
+            na.rm = TRUE
+            )
+       )
+  }    
+  
+```
+  
+    
+  Run the extrapolation stats function.
+```{r}
+
+# accuracy_extrap_arima_xreg$`ttb.gov/foia/frl.shtml`$splits[[1]] %>% 
+#   assessment() %>% 
+#   select(date,
+#          pageview_sum
+#          ) %>% 
+#   left_join(select(accuracy_extrap_arima_xreg$`ttb.gov/foia/frl.shtml`$prophet.forecast[[1]],
+#                    ds,
+#                    yhat,
+#                    yhat_zero_floor
+#                    ) %>% 
+#               mutate_at(vars(ds), as.Date),
+#               by = c("date" = "ds")
+#             ) %>% 
+#   mutate(#pct_error = (pageview_sum - yhat_zero_floor) / pageview_sum * 100,
+#            sqrd_error = (pageview_sum - yhat_zero_floor)^2 
+#            ) %>% 
+#     arrange(date)
+
+accuracy_extrap_prophet <-
+  pmap(.l = list(a = accuracy_extrap_arima_xreg),
+       .f = function(a) {
+         extrap <-
+           map2_dbl(a$splits,
+                    a$prophet.forecast,
+                    get_extrap_prophet
+                    )
+         
+         extrap_hol <-
+           map2_dbl(a$splits,
+                    a$prophet_hol.forecast,
+                    get_extrap_prophet
+                    )
+         
+         a$prophet.extrapolation <- extrap
+         
+         a$prophet_hol.extrapolation <- extrap_hol
+         
+         return(a)
+         }
+       )
+
+
+# saving is done to avoid having to run the models again
+saveRDS(accuracy_extrap_prophet,
+        paste0(wd,
+               "/Models/",
+               "accuracy_extrap_prophet.Rds"
+               )
+        )
+
+# accuracy_extrap_prophet <-
+#   readRDS(paste0(wd,
+#                  "/Models/",
+#                  "accuracy_extrap_prophet.Rds"
+#                  )
+#           )
+
+names(accuracy_extrap_prophet$`40600`)
+accuracy_extrap_prophet$`40600`$prophet.extrapolation
+accuracy_extrap_prophet$`40600`$prophet_hol.extrapolation
+
+message("prophet")
+accuracy_extrap_prophet %>% 
+  map(~ summary(.x$prophet.extrapolation)
+      )
+
+message("prophet_hol")
+accuracy_extrap_prophet %>% 
+  map(~ summary(.x$prophet_hol.extrapolation)
+      )
+
+
+rm(accuracy_extrap_arima_xreg)
+
+```
+
+
+## Visualize the Accuracy Measures
+
+ Add an identifier for the relevant `el_stop_id` value.
+```{r}
+  
+add_el_stop_id <-
+  pmap(.l = list(a = accuracy_extrap_prophet,
+                 c = names(accuracy_extrap_prophet)
+                 ),
+       .f = function(a, c) {
+         a$el_stop_id <- c
+         
+         return(a)
+       }
+       )
+
+# saving is done to avoid having to run the forecasts again
+saveRDS(add_el_stop_id,
+        paste0(wd,
+               "/Models/",
+               "add_el_stop_id.Rds"
+               )
+        )
+
+# add_el_stop_id <-
+#   readRDS(paste0(wd,
+#                  "/Models/",
+#                  "add_el_stop_id.Rds"
+#                  )
+#           )
+
+
+names(add_el_stop_id$`40600`)
+
+
+rm(accuracy_extrap_prophet)
+
+```
+  
+    
+  Plot interpolation and extrapolation over time, by model.
+```{r}
+
+plot_interp_extrap <-
+  add_el_stop_id %>% 
+  map(~ select(.x,
+               arima.interpolation,
+               arima.extrapolation,
+               arima_xreg.interpolation,
+               arima_xreg.extrapolation,
+               prophet.interpolation,
+               prophet.extrapolation,
+               prophet_hol.interpolation,
+               prophet_hol.extrapolation,
+               rf.interpolation,
+               rf.extrapolation,
+               xgb.interpolation,
+               xgb.extrapolation,
+               start_date,
+               el_stop_id
+               ) %>%
+        as.data.frame %>%
+        gather(error, RMSE, -start_date, -el_stop_id) %>% 
+        separate(error,
+                 c("model", "type"),
+                 sep = "\\.",
+                 remove = FALSE
+                 ) %>% 
+        ggplot(aes(x = start_date,
+                   y = RMSE,
+                   # col = error
+                   color = model
+                   )
+               ) +
+        facet_wrap(~ type,
+                   scales = "free"
+                   ) +
+        geom_point() +
+        geom_line() +
+        ggtitle(label = .$el_stop_id#,
+                # subtitle = "ARIMA-based model"
+                ) +
+        theme_bw() +
+        theme(legend.position = "bottom")
+      )
+
+plot_interp_extrap
+
+```
+
+
+
+
+
+
+
+```{r}
+
+median_RMSE_by_model <-
+  pmap(.l = list(a = add_el_stop_id),
+       .f = function(a) {
+         med.arima = median(a$arima.extrapolation)
+         med.arima_xreg = median(a$arima_xreg.extrapolation)
+         med.prophet = median(a$prophet.extrapolation)
+         med.prophet_hol = median(a$prophet_hol.extrapolation)
+         med.rf = median(a$rf.extrapolation)
+         med.xgb = median(a$xgb.extrapolation)
+         
+         med_extrap_all_models =
+           data.frame(el_stop_id = unique(a$el_stop_id),
+                      arima = med.arima,
+                      arima_xreg = med.arima_xreg,
+                      prophet = med.prophet,
+                      prophet_hol = med.prophet_hol,
+                      rf = med.rf,
+                      xgb = med.xgb
+                      )
+         
+         return(med_extrap_all_models)
+         }
+       ) %>% 
+  bind_rows()
+
+
+# View(median_RMSE_by_model)
+
+
+median_RMSE_by_model %>% 
+  gather(key = "model",
+         value = "RMSE_med",
+         -el_stop_id
+         ) %>% 
+  ggplot(aes(x = model,
+             y = RMSE_med,
+             fill = model
+             )
+         ) +
+  geom_col() +
+  geom_text(aes(label = format(round(RMSE_med, 1),
+                               1
+                               )
+                ),
+            size = 3,
+            nudge_y = 15
+            ) +
+  facet_wrap(~ el_stop_id,
+             ncol = 2,
+             scales = "free"
+             ) +
+  # scale_y_continuous(limits = c(0, 110),
+  #                    breaks = seq(0, 110, 25)
+  #                    ) +
+  coord_flip() +
+  theme_bw() +
+  theme(legend.position = "none")
+
+
+rm(median_RMSE_by_model)
+
+```
+
+
+## Visualize Actual vs Models
+**NOTE: plotting is just for extrapolation data**  
+  
+  Prepare the data.
+```{r}
+
+# function to munge the data
+get_forecast_data <-
+  function(el_stop_id) {
+    data_assessment_list =
+      map(.x = el_stop_id$splits,
+          .f = function(a) {
+            extrap =
+              assessment(a) %>% 
+              select(el_date,
+                     el_stop_id,
+                     el_rides
+                     ) %>% 
+              rename(actual = el_rides)
+            
+            return(extrap)
+            }
+          )
+  
+  data_arima_list =
+    el_stop_id$arima.forecast %>% 
+    map(~ select(.x,
+                 el_date,
+                 # full_url,
+                 pred_zero_floor
+                 ) %>% 
+          # mutate(model_arima = "arima") %>%
+          rename(yhat.arima = pred_zero_floor)
+        )
+ 
+  data_arima_xreg_list =
+    el_stop_id$arima_xreg.forecast %>% 
+    map(~ select(.x,
+                 el_date,
+                 # full_url,
+                 pred_zero_floor
+                 ) %>% 
+          # mutate(model_arima = "arima") %>%
+          rename(yhat.arima_xreg = pred_zero_floor)
+        )
+  
+  data_prophet_list =
+    el_stop_id$prophet.forecast %>% 
+    map(~ select(.x,
+                 ds,
+                 yhat_zero_floor
+                 ) %>% 
+          mutate_at(vars(ds), as.Date) %>% 
+          # mutate(model_prophet = "prophet") %>% 
+          rename(yhat.prophet = yhat_zero_floor)
+        )
+  
+  data_prophet_hol_list =
+    el_stop_id$prophet_hol.forecast %>% 
+    map(~ select(.x,
+                 ds,
+                 yhat_zero_floor
+                 ) %>% 
+          mutate_at(vars(ds), as.Date) %>% 
+          # mutate(model_prophet = "prophet") %>% 
+          rename(yhat.prophet_hol = yhat_zero_floor)
+        )
+  
+  data_rf_list =
+    el_stop_id$rf.forecast_extrap %>% 
+    map(~ select(.x,
+                 el_date,
+                 yhat_zero_floor
+                 ) %>% 
+          rename(yhat.rf = yhat_zero_floor)
+        )
+  
+  data_xgb_list =
+    el_stop_id$xgb.forecast_extrap %>% 
+    map(~ select(.x,
+                 el_date,
+                 yhat_zero_floor
+                 ) %>% 
+          rename(yhat.xgb = yhat_zero_floor)
+        )
+  
+  
+  full_data_list =
+    pmap(.l = list(a = data_assessment_list,
+                   b = data_arima_list,
+                   c = data_arima_xreg_list,
+                   d = data_prophet_list,
+                   e = data_prophet_hol_list,
+                   f = data_rf_list,
+                   g = data_xgb_list
+                   ),
+         .f = function(a, b, c, d, e, f, g) {
+           a %>% 
+             left_join(b,
+                       by = "el_date"
+                       ) %>% 
+             left_join(c,
+                       by = "el_date"
+                       ) %>% 
+             left_join(d,
+                       by = c("el_date" = "ds")
+                       ) %>% 
+             left_join(e,
+                       by = c("el_date" = "ds")
+                       ) %>% 
+             left_join(f,
+                       by = "el_date"
+                       ) %>% 
+             left_join(g,
+                       by = "el_date"
+                       )
+           }
+         )
+  
+  full_data = bind_rows(full_data_list)
+  
+  return(full_data)
+  }
+
+
+# run the function for each url
+forecast_data_list <-
+  add_el_stop_id %>% 
+  map(~ get_forecast_data(.x)
+      )
+
+
+
+# munge the resulting data for ploting
+forecast_data_to_plot_list <-
+  forecast_data_list %>% 
+  map(~ gather(.x,
+               key = "key",
+               value = "el_rides",
+               yhat.arima,
+               yhat.arima_xreg,
+               yhat.prophet,
+               yhat.prophet_hol,
+               yhat.rf,
+               yhat.xgb,
+               actual
+               ) %>% 
+        arrange(el_date,
+                key
+                )
+      )
+
+# View(forecast_data_to_plot_list[[1]])
+
+
+rm(forecast_data_list)
+
+```
+  
+    
+  Plot.
+```{r}
+
+clrs <- c("actual" = "black",
+          "yhat.arima" = "red",
+          "yhat.arima_xreg" = "green",
+          "yhat.prophet" = "blue",
+          "yhat.prophet_hol" = "orange",
+          "yhat.rf" = "purple",
+          "yhat.xgb" = "pink"
+          )
+
+lne_ <- c("solid",
+          "dashed",
+          "dashed",
+          "dashed",
+          "dashed",
+          "dashed",
+          "dashed"
+          )
+
+
+plot_actuals_vs_models <-
+  forecast_data_to_plot_list %>%  
+  map(~ .x %>% 
+        mutate(l_type = if_else(key == "actual",
+                                "actual",
+                                "forecast"
+                                )#,
+               # l_size = if_else(key == "actual",
+               #                  1.5,
+               #                  1
+               #                  )
+               ) %>% 
+        ggplot(aes(x = el_date,
+                   y = el_rides,
+                   color = key#,
+                   # group = l_type
+                   )
+               ) +
+        # facet_wrap(~ full_url,
+        #            scales = "free"
+        #            ) +
+        geom_point(na.rm = TRUE) +
+        geom_line(aes(linetype = l_type
+                      ),
+                  na.rm = TRUE
+                  ) +
+        scale_colour_manual(values = clrs
+                            ) +
+        scale_linetype_manual(values = lne_,
+                              guide = FALSE
+                              ) +
+        # scale_size_manual(values = c(4, 1, 1, 1, 1)
+        #                   ) +
+        scale_x_date(limits = c(max(.$el_date) - (7 * 3),
+                                max(.$el_date) + (7 * 1)
+                                )
+                     ) +
+        ggtitle(label = .$el_stop_id) +
+        theme_bw() +
+        theme(legend.position = "bottom")
+      )
+
+plot_actuals_vs_models
+
+
+rm(clrs, lne_)
+
+```
+ 
+ 
+ 
+ 
+ 
+ 
+
+
+
+
+Loading the final dataset again.
 ```{r}
 
 ##  THINK ABOUT:
