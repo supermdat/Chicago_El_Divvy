@@ -1560,7 +1560,7 @@ rm(weather_20171231)
 
 ### Weather Variables
   
-  As the prediction forcast is 14 days in the future, I don't think we'll be able to accuratley know the temperature variables `tmin` and `tmax` within one degree of accuracy. So here, I simply test if knowing within `X` degrees of accuracy is viable.  
+  As the prediction forcast is 7 days in the future, I don't think we'll be able to accuratley know the temperature variables `tmin` and `tmax` within one degree of accuracy. So here, I simply test if knowing within `X` degrees of accuracy is viable.  
     
   Visually, it looks like 25 degrees may be a good range (this is a lot wider than I epected!).
 ```{r}
@@ -2795,8 +2795,23 @@ DV_nzv_predict <-
        .y = DV_train_data,
        .f = function(a, b) {
          predict(a, b)
-       }
+         }
        )
+
+
+saveRDS(DV_nzv_predict,
+        paste0(wd,
+               "/Data/Interim/",
+               "DV_nzv_predict.Rds"
+               )
+        )
+
+# DV_nzv_predict <-
+#   readRDS(paste0(wd,
+#                  "/Data/Interim/",
+#                  "DV_nzv_predict.Rds"
+#                  )
+#           )
 
 
 message("before reduction")
@@ -2838,8 +2853,23 @@ DV_corr_predict <-
        .y = DV_nzv_predict,
        .f = function(a, b) {
          predict(a, b)
-       }
+         }
        )
+
+
+saveRDS(DV_corr_predict,
+        paste0(wd,
+               "/Data/Interim/",
+               "DV_corr_predict.Rds"
+               )
+        )
+
+# DV_corr_predict <-
+#   readRDS(paste0(wd,
+#                  "/Data/Interim/",
+#                  "DV_corr_predict.Rds"
+#                  )
+#           )
 
 
 message("before corr reduction")
@@ -2876,9 +2906,11 @@ rm(DV_corr_list)
 period_train <- round((365 * 1.5),
                       digits = 0
                       ) + 30 # 2 years + 28 days of data needed for LSTM Keras modeling
+
 period_test <- round((365 * 0.5),
                      digits = 0
                      ) + 30 # test on 1 year * 28 days of data (even though we just predict 14 days out) needed for LSTM Keras modeling
+
 skip_span <- 8 # gives 13 evenly distributed  splits
 
 ```
@@ -4077,6 +4109,763 @@ pmap(.l = list(a = prophet.plots
 ```
 
 
+## Modeling With H2O
+
+
+### All Variables  
+  
+  First, create one-hot variables from the `add_trn_val_test` dataset.
+```{r}
+
+# One-Hot
+h2o_one_hot <-
+  add_trn_val_test %>% 
+  map(~ func_one_hot_vars(.x))
+
+
+# create train-val-test for h2o
+h2o_train_tbl <-
+  h2o_one_hot %>% 
+  map(~ (filter(.x,
+                data_use_el_stop_id == "01_train"
+                )
+         )
+      )
+
+h2o_valid_tbl <-
+  h2o_one_hot %>% 
+  map(~ (filter(.x,
+                data_use_el_stop_id == "02_validation"
+                )
+         )
+      )
+
+h2o_test_tbl <-
+  h2o_one_hot %>% 
+  map(~ (filter(.x,
+                data_use_el_stop_id == "03_test"
+                )
+         )
+      )
+
+
+# Fire up h2o
+h2o.init()
+
+
+# Create the Interpolation & Extrapolation Datasets
+h2o_data <-
+  pmap(.l = list(a = prophet.plots),
+       .f = function(a) {
+         dat_interp = a$splits %>% 
+           map(~ analysis(.x) %>% 
+                 func_one_hot_vars() %>% 
+                 as.h2o()
+               )
+         
+         dat_extrap = a$splits %>% 
+           map(~ assessment(.x) %>% 
+                 func_one_hot_vars() %>% 
+                 as.h2o()
+               )
+         
+         a$interp_data = dat_interp
+         a$extrap_data = dat_extrap
+         
+         return(a)
+         }
+       )
+
+
+rm(prophet.plots)
+
+
+# Convert to H2OFrame objects
+h2o_train <- h2o_train_tbl %>% map(~ as.h2o(.x))
+h2o_valid <- h2o_valid_tbl %>% map(~ as.h2o(.x))
+h2o_test  <- h2o_test_tbl %>% map(~ as.h2o(.x))
+
+
+# Set names for h2o
+y <- "el_rides"
+x <- h2o_train %>% 
+  map(~ setdiff(names(.x),
+                y
+                )
+      )
+
+
+# user   system  elapsed 
+#  407.637   86.055 1231.047
+# ~ 20 min
+start <- proc.time()
+
+h2o_automl_models <-
+  pmap(.l = list(a = x,
+                 b = h2o_train,
+                 c = h2o_valid,
+                 d = h2o_test
+                 ),
+       .f = function(a, b, c, d) {
+         h2o.automl(
+           x = a,
+           y = y,
+           training_frame = b,
+           validation_frame = c,
+           leaderboard_frame = d,
+           nfolds = 13,
+           # max_runtime_secs = 300,
+           max_runtime_secs = 30,
+           stopping_metric = "deviance"
+           )
+         }
+       )
+
+h2o.time <- proc.time() - start
+rm(start)
+
+h2o.time
+
+
+saveRDS(h2o.time,
+        paste0(wd,
+               "/Models/",
+               "h2o.time.Rds"
+               )
+        )
+
+# print(automl_models_h2o$`40600`@leaderboard)
+
+
+# Extract leader model
+h2o_automl_leader <-
+  pmap(.l = list(a = h2o_automl_models),
+       .f = function(a) {
+         ldr = a@leader
+         
+         return(ldr)
+         }
+       )
+
+
+# save the leader
+saveRDS(h2o_automl_leader,
+        paste0(wd,
+               "/Models/",
+               "h2o_automl_leader.Rds"
+               )
+        )
+
+# pmap(.l = list(a = automl_leader,
+#                b = names(automl_leader)
+#                ),
+#      .f = function(a, b) {
+#        h2o.saveModel(object = a,
+#                      path = paste0(wd,
+#                                    "/Models/",
+#                                    b,
+#                                    "_"#,
+#                                    # "automl_leader.Rds"
+#                                    ),
+#                      force = TRUE
+#                      )
+#        }
+#      )
+
+
+# automl_leader <-
+#   h2o.loadModel(path = paste0(wd,
+#                               "/Models/",
+#                               "GBM_grid_0_AutoML_20181009_102645_model_0"
+#                               )
+#                 )
+
+
+# get predictions on test set
+h2o_pred <-
+  pmap(.l = list(a = h2o_automl_leader,
+                 b = h2o_test
+                 ),
+       .f = function(a, b) {
+         res = h2o.predict(a, newdata = b)
+         
+         return(res)
+         }
+       )
+
+
+# get predictions on interp & extrap
+h2o_forecasts <-
+  pmap(.l = list(a = h2o_data,
+                 b = h2o_automl_leader
+                 ),
+       .f = function(a, b) {
+         int_pred =
+           pmap(.l = list(c = a$interp_data),
+                .f = function(c) {
+                  pred = h2o.predict(b, newdata = c) %>% 
+                    as.data.frame()
+                  
+                  return(pred)
+                  }
+                )
+         
+         ext_pred =
+           pmap(.l = list(d = a$extrap_data),
+                .f = function(d) {
+                  pred = h2o.predict(b, newdata = d) %>% 
+                    as.data.frame()
+                  
+                  return(pred)
+                  }
+                )
+         
+         # interp_data_h2o$`40600`$interp_data[[1]] %>% as.data.frame() %>% select(el_rides)
+         int_data =
+           pmap(.l = list(e = a$interp_data),
+                .f = function(e) {
+                  df = e %>% as.data.frame()
+                  
+                  return(df)
+                  }
+                )
+         
+         ext_data =
+           pmap(.l = list(f = a$extrap_data),
+                .f = function(f) {
+                  df = f %>% as.data.frame()
+                  
+                  return(df)
+                  }
+                )
+         
+         
+         int_fcast =
+           pmap(.l = list(g = int_data,
+                          h = int_pred
+                          ),
+                .f = function(g, h) {
+                  res = g %>% 
+                    select(el_date, el_rides) %>% 
+                    bind_cols(h) %>% 
+                    rename(actual = el_rides,
+                           yhat = predict
+                           ) %>% 
+                    mutate(sqrd_error = (actual - yhat)^2
+                           )
+                  }
+                )
+         
+         ext_fcast =
+           pmap(.l = list(i = ext_data,
+                          j = ext_pred
+                          ),
+                .f = function(i, j) {
+                  res = i %>% 
+                    select(el_date, el_rides) %>% 
+                    bind_cols(j) %>% 
+                    rename(actual = el_rides,
+                           yhat = predict
+                           ) %>% 
+                    mutate(sqrd_error = (actual - yhat)^2
+                           )
+                  }
+                )
+         
+         
+         a$h2o.interp.forecast = int_fcast
+         a$h2o.extrap.forecast = ext_fcast
+         
+         return(a)
+         }
+       )
+
+
+rm(h2o_data)
+
+# h2o_forecasts$`40600` %>% names()
+# h2o_forecasts$`40600`$h2o.interp.forecast[[1]] %>%
+#   pull(sqrd_error) %>% 
+#   mean(na.rm = TRUE) %>%
+#   sqrt()
+
+
+h2o_accuracy_stats <-
+  pmap(.l = list(a = h2o_forecasts),
+       .f = function(a) {
+         rmse_interp =
+           a$h2o.interp.forecast %>% 
+           map_dbl(~ sqrt(mean(.x$sqrd_error)
+                          )
+               )
+         
+         rmse_extrap =
+           a$h2o.extrap.forecast %>% 
+           map_dbl(~ sqrt(mean(.x$sqrd_error)
+                          )
+               )
+         
+         a$h2o.interpolation = rmse_interp
+         a$h2o.extrapolation = rmse_extrap
+         
+         return(a)
+         }
+       )
+
+
+# save the dataset 
+saveRDS(h2o_accuracy_stats,
+        paste0(wd,
+               "/Models/",
+               "h2o_accuracy_stats.Rds"
+               )
+        )
+
+
+# h2o_accuracy_stats <-
+#   readRDS(paste0(wd,
+#                  "/Models/",
+#                  "h2o_accuracy_stats.Rds"
+#                  )
+#           )
+
+
+rm(h2o_forecasts)
+
+
+# Summary stats of accuracy  
+h2o_accuracy_stats %>% 
+  map(~ summary(.x$h2o.interpolation)
+      )
+
+h2o_accuracy_stats %>% 
+  map(~ summary(.x$h2o.extrapolation)
+      )
+
+
+
+# measure performance on test dataset
+h2o_perf <-
+  pmap(.l = list(a = h2o_automl_leader,
+                 b = h2o_test),
+       .f = function(a, b) {
+         per = h2o.performance(a, newdata = b)
+         
+         return(per)
+         }
+       )
+
+h2o_perf
+
+
+# save the leader performance
+saveRDS(h2o_perf,
+        paste0(wd,
+               "/Models/",
+               "h2o_perf.Rds"
+               )
+        )
+
+
+# h2o_perf <-
+#   readRDS(paste0(wd,
+#                  "/Models/",
+#                  "h2o_perf.Rds"
+#                  )
+#           )
+
+
+# h2o.removeAll()
+
+```
+
+
+### Limited Variables
+
+```{r}
+
+# select specific columns to use
+col_names <-
+  DV_corr_predict %>% 
+  map(~ colnames(.x))
+
+
+select_cols <-
+  pmap(.l = list(a = h2o_one_hot,
+                 b = col_names
+                 ),
+       .f = function(a, b) {
+         res = a[, colnames(a) %in% b]
+         
+         return(res)
+         }
+       )
+
+
+rm(col_names)
+
+
+# create train-val-test for h2o
+h2o.limvars_train_tbl <-
+  select_cols %>% 
+  map(~ (filter(.x,
+                data_use_el_stop_id == "01_train"
+                )
+         )
+      )
+
+h2o.limvars_valid_tbl <-
+  select_cols %>% 
+  map(~ (filter(.x,
+                data_use_el_stop_id == "02_validation"
+                )
+         )
+      )
+
+h2o.limvars_test_tbl <-
+  select_cols %>% 
+  map(~ (filter(.x,
+                data_use_el_stop_id == "03_test"
+                )
+         )
+      )
+
+
+rm(select_cols)
+
+
+# Fire up h2o
+# h2o.init()
+
+
+# Create the Interpolation & Extrapolation Datasets
+# h2o.limvars_data <-
+#   pmap(.l = list(a = prophet.plots),
+#        .f = function(a) {
+#          dat_interp = a$splits %>% 
+#            map(~ analysis(.x) %>% 
+#                  func_one_hot_vars() %>% 
+#                  as.h2o()
+#                )
+#          
+#          dat_extrap = a$splits %>% 
+#            map(~ assessment(.x) %>% 
+#                  func_one_hot_vars() %>% 
+#                  as.h2o()
+#                )
+#          
+#          a$interp_data = dat_interp
+#          a$extrap_data = dat_extrap
+#          
+#          return(a)
+#          }
+#        )
+# 
+# 
+# rm(prophet.plots)
+
+
+
+# Convert to H2OFrame objects
+h2o.limvars_train <- h2o.limvars_train_tbl %>% map(~ as.h2o(.x))
+h2o.limvars_valid <- h2o.limvars_valid_tbl %>% map(~ as.h2o(.x))
+h2o.limvars_test  <- h2o.limvars_test_tbl %>% map(~ as.h2o(.x))
+
+
+# Set names for h2o
+y <- "el_rides"
+x <- h2o.limvars_train %>% 
+  map(~ setdiff(names(.x),
+                y
+                )
+      )
+
+
+# user   system  elapsed 
+#   22.491   17.177 1135.913 
+# ~ 19 min
+start <- proc.time()
+
+h2o.limvars_automl_models <-
+  pmap(.l = list(a = x,
+                 b = h2o.limvars_train,
+                 c = h2o.limvars_valid,
+                 d = h2o.limvars_test
+                 ),
+       .f = function(a, b, c, d) {
+         h2o.automl(
+           x = a,
+           y = y,
+           training_frame = b,
+           validation_frame = c,
+           leaderboard_frame = d,
+           nfolds = 13,
+           # max_runtime_secs = 300,
+           max_runtime_secs = 30,
+           stopping_metric = "deviance"
+           )
+         }
+       )
+
+h2o.limvars.time <- proc.time() - start
+rm(start)
+
+h2o.limvars.time
+
+
+saveRDS(h2o.limvars.time,
+        paste0(wd,
+               "/Models/",
+               "h2o.limvars.time.Rds"
+               )
+        )
+
+# print(h2o.limvars_automl_models$`40600`@leaderboard)
+
+
+# Extract leader model
+h2o.limvars_automl_leader <-
+  pmap(.l = list(a = h2o.limvars_automl_models),
+       .f = function(a) {
+         ldr = a@leader
+         
+         return(ldr)
+         }
+       )
+
+
+# save the leader
+saveRDS(h2o.limvars_automl_leader,
+        paste0(wd,
+               "/Models/",
+               "h2o.limvars_automl_leader.Rds"
+               )
+        )
+
+# pmap(.l = list(a = automl_leader,
+#                b = names(automl_leader)
+#                ),
+#      .f = function(a, b) {
+#        h2o.saveModel(object = a,
+#                      path = paste0(wd,
+#                                    "/Models/",
+#                                    b,
+#                                    "_"#,
+#                                    # "automl_leader.Rds"
+#                                    ),
+#                      force = TRUE
+#                      )
+#        }
+#      )
+
+
+# automl_leader <-
+#   h2o.loadModel(path = paste0(wd,
+#                               "/Models/",
+#                               "GBM_grid_0_AutoML_20181009_102645_model_0"
+#                               )
+#                 )
+
+
+# get predictions on test set
+h2o.limvars_pred <-
+  pmap(.l = list(a = h2o.limvars_automl_leader,
+                 b = h2o.limvars_test
+                 ),
+       .f = function(a, b) {
+         res = h2o.predict(a, newdata = b)
+         
+         return(res)
+         }
+       )
+
+
+# get predictions on interp & extrap
+h2o.limvars_forecasts <-
+  pmap(.l = list(a = h2o_accuracy_stats,
+                 b = h2o.limvars_automl_leader
+                 ),
+       .f = function(a, b) {
+         int_pred =
+           pmap(.l = list(c = a$interp_data),
+                .f = function(c) {
+                  pred = h2o.predict(b, newdata = c) %>% 
+                    as.data.frame()
+                  
+                  return(pred)
+                  }
+                )
+         
+         ext_pred =
+           pmap(.l = list(d = a$extrap_data),
+                .f = function(d) {
+                  pred = h2o.predict(b, newdata = d) %>% 
+                    as.data.frame()
+                  
+                  return(pred)
+                  }
+                )
+         
+         
+         int_data =
+           pmap(.l = list(e = a$interp_data),
+                .f = function(e) {
+                  df = e %>% as.data.frame()
+                  
+                  return(df)
+                  }
+                )
+         
+         ext_data =
+           pmap(.l = list(f = a$extrap_data),
+                .f = function(f) {
+                  df = f %>% as.data.frame()
+                  
+                  return(df)
+                  }
+                )
+         
+         
+         int_fcast =
+           pmap(.l = list(g = int_data,
+                          h = int_pred
+                          ),
+                .f = function(g, h) {
+                  res = g %>% 
+                    select(el_date, el_rides) %>% 
+                    bind_cols(h) %>% 
+                    rename(actual = el_rides,
+                           yhat = predict
+                           ) %>% 
+                    mutate(sqrd_error = (actual - yhat)^2
+                           )
+                  }
+                )
+         
+         ext_fcast =
+           pmap(.l = list(i = ext_data,
+                          j = ext_pred
+                          ),
+                .f = function(i, j) {
+                  res = i %>% 
+                    select(el_date, el_rides) %>% 
+                    bind_cols(j) %>% 
+                    rename(actual = el_rides,
+                           yhat = predict
+                           ) %>% 
+                    mutate(sqrd_error = (actual - yhat)^2
+                           )
+                  }
+                )
+         
+         
+         a$h2o.limvars.interp.forecast = int_fcast
+         a$h2o.limvars.extrap.forecast = ext_fcast
+         
+         return(a)
+         }
+       )
+
+
+rm(h2o_accuracy_stats)
+
+# h2o.limvars_forecasts$`40600` %>% names()
+# h2o.limvars_forecasts$`40600`$h2o.interp.forecast[[1]] %>%
+#   pull(sqrd_error) %>% 
+#   mean(na.rm = TRUE) %>%
+#   sqrt()
+
+
+h2o.limvars_accuracy_stats <-
+  pmap(.l = list(a = h2o.limvars_forecasts),
+       .f = function(a) {
+         rmse_interp =
+           a$h2o.limvars.interp.forecast %>% 
+           map_dbl(~ sqrt(mean(.x$sqrd_error)
+                          )
+               )
+         
+         rmse_extrap =
+           a$h2o.limvars.extrap.forecast %>% 
+           map_dbl(~ sqrt(mean(.x$sqrd_error)
+                          )
+               )
+         
+         a$h2o.limvars.interpolation = rmse_interp
+         a$h2o.limvars.extrapolation = rmse_extrap
+         
+         return(a)
+         }
+       )
+
+
+# save the dataset 
+saveRDS(h2o.limvars_accuracy_stats,
+        paste0(wd,
+               "/Models/",
+               "h2o.limvars_accuracy_stats.Rds"
+               )
+        )
+
+
+# h2o.limvars_accuracy_stats <-
+#   readRDS(paste0(wd,
+#                  "/Models/",
+#                  "h2o.limvars_accuracy_stats.Rds"
+#                  )
+#           )
+
+
+rm(h2o.limvars_forecasts)
+
+
+# Summary stats of accuracy  
+h2o.limvars_accuracy_stats %>% 
+  map(~ summary(.x$h2o.limvars.interpolation)
+      )
+
+h2o.limvars_accuracy_stats %>% 
+  map(~ summary(.x$h2o.limvars.extrapolation)
+      )
+
+
+
+# measure performance on test dataset
+h2o.limvars_perf <-
+  pmap(.l = list(a = h2o.limvars_automl_leader,
+                 b = h2o.limvars_test),
+       .f = function(a, b) {
+         per = h2o.performance(a, newdata = b)
+         
+         return(per)
+         }
+       )
+
+h2o.limvars_perf
+
+
+# save the leader performance
+saveRDS(h2o.limvars_perf,
+        paste0(wd,
+               "/Models/",
+               "h2o.limvars_perf.Rds"
+               )
+        )
+
+
+# h2o.limvars_perf <-
+#   readRDS(paste0(wd,
+#                  "/Models/",
+#                  "h2o.limvars_perf.Rds"
+#                  )
+#           )
+
+
+h2o.removeAll()
+
+```
+
+
 ## Accuracy Measurements  
     
   Now we can check some summary (RMSE) statistics. **NOTE: these are summary statistics based on the data used to build the models.**  
@@ -4085,7 +4874,7 @@ pmap(.l = list(a = prophet.plots
 ```{r}
 
 accuracy_interp_arima <-
-  pmap(.l = list(a = prophet.plots),
+  pmap(.l = list(a = h2o.limvars_accuracy_stats),
        .f = function(a) {
            
          interp_a =
@@ -4127,7 +4916,7 @@ accuracy_interp_arima %>%
       )
 
 
-rm(prophet.plots)
+rm(h2o.limvars_accuracy_stats)
 
 ```
 
@@ -4579,7 +5368,7 @@ rm(rf_xgb_forecasts_individualized)
 ```
   
     
-  Now we can check some summary (MAPE) statistics. **NOTE: these are summary statistics based on the data NOT used to build the models.**  
+  Now we can check some summary (RMSE) statistics. **NOTE: these are summary statistics based on the data NOT used to build the models.**  
     
 ### Extrapolation - ARIMA Model  
   
@@ -4627,7 +5416,6 @@ get_extrap_arima <- function(arima.fcast) {
     
   Run the the forecast and extrapolation functions.
 ```{r}
-
 
 accuracy_extrap_arima <-
   pmap(.l = list(a = accuracy_interp_ML),
@@ -4963,6 +5751,40 @@ rm(accuracy_extrap_prophet)
 ```
   
     
+  Now I simply update the `run_times` dataset with the relevant h2o info.
+```{r}
+
+
+run_times[9:10] <-
+  list(h2o = as.list(h2o.time),
+       h2o.limvars = as.list(h2o.limvars.time)
+       )
+
+names(run_times)[9:10] <- c("h2o", "h2o.limvars")
+
+
+str(run_times)
+
+
+# saving is done to avoid having to run the forecasts again
+saveRDS(run_times,
+        paste0(wd,
+               "/Models/",
+               "run_times.Rds"
+               )
+        )
+
+# run_times <-
+#   readRDS(paste0(wd,
+#                  "/Models/",
+#                  "run_times.Rds"
+#                  )
+#           )
+
+```
+  
+   
+    
   Plot interpolation and extrapolation over time, by model.
 ```{r}
 
@@ -4981,10 +5803,17 @@ plot_interp_extrap <-
                rf.extrapolation,
                xgb.interpolation,
                xgb.extrapolation,
+               h2o.interpolation,
+               h2o.extrapolation,
+               h2o.limvars.interpolation,
+               h2o.limvars.extrapolation,
                start_date,
                el_stop_id
                ) %>%
-        as.data.frame %>%
+        as.data.frame %>% 
+        rename(h2o_limvars.interpolation = h2o.limvars.interpolation,
+               h2o_limvars.extrapolation = h2o.limvars.extrapolation
+               ) %>% 
         gather(error, RMSE, -start_date, -el_stop_id) %>% 
         separate(error,
                  c("model", "type"),
@@ -5026,6 +5855,8 @@ median_RMSE_by_model <-
          med.prophet_hol = median(a$prophet_hol.extrapolation)
          med.rf = median(a$rf.extrapolation)
          med.xgb = median(a$xgb.extrapolation)
+         med.h2o = median(a$h2o.extrapolation)
+         med.h2o_limvars = median(a$h2o.limvars.extrapolation)
          
          med_extrap_all_models =
            data.frame(el_stop_id = unique(a$el_stop_id),
@@ -5034,7 +5865,9 @@ median_RMSE_by_model <-
                       prophet = med.prophet,
                       prophet_hol = med.prophet_hol,
                       rf = med.rf,
-                      xgb = med.xgb
+                      xgb = med.xgb,
+                      h2o = med.h2o,
+                      h2o_limvars = med.h2o_limvars
                       )
          
          return(med_extrap_all_models)
@@ -5173,7 +6006,24 @@ func_get_forecast_data <-
                  ) %>% 
           rename(yhat.xgb = yhat_zero_floor)
         )
+  # add_el_stop_id$`40600`$h2o.limvars.extrap.forecast[[1]] %>% str()
+  data_h2o_list = 
+    el_stop_id$h2o.extrap.forecast %>% 
+    map(~ rename(.x,
+                 yhat.h2o = yhat
+                 ) %>% 
+          mutate(el_date = as_date(el_date)
+                 )
+        )
   
+  data_h2o_limvars_list = 
+    el_stop_id$h2o.limvars.extrap.forecast %>% 
+    map(~ rename(.x,
+                 yhat.h2o_limvars = yhat
+                 ) %>% 
+          mutate(el_date = as_date(el_date)
+                 )
+        )
   
   full_data_list =
     pmap(.l = list(a = data_assessment_list,
@@ -5182,9 +6032,11 @@ func_get_forecast_data <-
                    d = data_prophet_list,
                    e = data_prophet_hol_list,
                    f = data_rf_list,
-                   g = data_xgb_list
+                   g = data_xgb_list, 
+                   h = data_h2o_list,
+                   i = data_h2o_limvars_list
                    ),
-         .f = function(a, b, c, d, e, f, g) {
+         .f = function(a, b, c, d, e, f, g, h, i) {
            a %>% 
              left_join(b,
                        by = "el_date"
@@ -5202,6 +6054,12 @@ func_get_forecast_data <-
                        by = "el_date"
                        ) %>% 
              left_join(g,
+                       by = "el_date"
+                       ) %>% 
+             left_join(h,
+                       by = "el_date"
+                       ) %>% 
+             left_join(i,
                        by = "el_date"
                        )
            }
@@ -5236,6 +6094,8 @@ forecast_data_to_plot_list <-
                yhat.prophet_hol,
                yhat.rf,
                yhat.xgb,
+               yhat.h2o,
+               yhat.h2o_limvars,
                actual
                ) %>% 
         arrange(el_date,
@@ -5260,10 +6120,14 @@ clrs <- c("actual" = "black",
           "yhat.prophet" = "blue",
           "yhat.prophet_hol" = "orange",
           "yhat.rf" = "purple",
-          "yhat.xgb" = "pink"
+          "yhat.xgb" = "pink",
+          "yhat.h2o" = "yellow",
+          "yhat.h2o_limvars" = "lightblue"
           )
 
 lne_ <- c("solid",
+          "dashed",
+          "dashed",
           "dashed",
           "dashed",
           "dashed",
@@ -5324,362 +6188,23 @@ rm(clrs, lne_, forecast_data_to_plot_list, func_get_forecast_data)
  
  
  
-## Testing Out Modeling With H2O
-
-### All Variables
-
 ```{r}
 
-add_trn_val_test %>% 
-  map(~ group_by(.x,
-                 data_use_el_stop_id
-                 ) %>% 
-        summarise(date_min = min(el_date),
-                  date_max = max(el_date)
-                  )
-      )
-
-
-# One-Hot
-one_hot <-
-  add_trn_val_test %>% 
-  map(~ func_one_hot_vars(.x))
-
-# glimpse(add_trn_val_test$`40600`)
-# glimpse(one_hot$`40600`)
-
-
-# create train-val-test for h20
-train_tbl <-
-  one_hot %>% 
-  map(~ (filter(.x,
-                data_use_el_stop_id == "01_train"
-                )
-         )
-      )
-
-valid_tbl <-
-  one_hot %>% 
-  map(~ (filter(.x,
-                data_use_el_stop_id == "02_validation"
-                )
-         )
-      )
-
-test_tbl <-
-  one_hot %>% 
-  map(~ (filter(.x,
-                data_use_el_stop_id == "03_test"
-                )
-         )
-      )
-
-
-# Fire up h2o
-h2o.init()
-
-
-# Convert to H2OFrame objects
-train_h2o <- train_tbl %>% map(~ as.h2o(.x))
-valid_h2o <- valid_tbl %>% map(~ as.h2o(.x))
-test_h2o  <- test_tbl %>% map(~ as.h2o(.x))
-
-
-# Set names for h2o
-y <- "el_rides"
-x <- train_h2o %>% 
-  map(~ setdiff(names(.x),
-                y
-                )
-      )
-
-
-# linear regression model used, but can use any model
-# user   system  elapsed 
-#   32.875   29.217 1870.200 
-# ~ 31 min
-start <- proc.time()
-
-automl_models_h2o <-
-  pmap(.l = list(a = x,
-                 b = train_h2o,
-                 c = valid_h2o,
-                 d = test_h2o
-                 ),
-       .f = function(a, b, c, d) {
-         h2o.automl(
-           x = a,
-           y = y,
-           training_frame = b,
-           validation_frame = c,
-           leaderboard_frame = d,
-           nfolds = 13,
-           max_runtime_secs = 300,
-           stopping_metric = "deviance"
-           )
-         }
-       )
-
-time.h2o <- proc.time() - start
-rm(start)
-
-time.h2o
-
-# print(automl_models_h2o$`40600`@leaderboard)
-
-
-# Extract leader model
-automl_leader <-
-  pmap(.l = list(a = automl_models_h2o),
-       .f = function(a) {
-         ldr = a@leader
-         
-         return(ldr)
-         }
-       )
-
-
-# save the leader
-saveRDS(automl_leader,
-        paste0(wd,
-               "/Models/",
-               "automl_leader.Rds"
-               )
-        )
-
-
-# automl_leader <-
-#   readRDS(paste0(wd,
-#                  "/Models/",
-#                  "automl_leader.Rds"
-#                  )
-#           )
-
-
-# get predictions on test set
-pred_h2o <-
-  pmap(.l = list(a = automl_leader,
-                 b = test_h2o
-                 ),
-       .f = function(a, b) {
-         res = h2o.predict(a, newdata = b)
-         
-         return(res)
-         }
-       )
-
-
-# measure performance on test dataset
-perf <-
-  pmap(.l = list(a = automl_leader,
-                 b = test_h2o),
-       .f = function(a, b) {
-         per = h2o.performance(a, newdata = b)
-         
-         return(per)
-         }
-       )
-
-perf
-
-
-# save the leader performance
-saveRDS(perf,
-        paste0(wd,
-               "/Models/",
-               "perf.Rds"
-               )
-        )
+rm(list = ls(pattern = "h2o"))
+rm(list = ls(pattern = "get"))
+rm(list = ls(pattern = "func"))
+rm(list = ls(pattern = "fit"))
+rm(list = ls(pattern = "time."))
+rm(list = ls(pattern = "DV"))
+rm(list = ls(pattern = "models"))
+rm(list = ls(pattern = "Models"))
+rm(list = ls(pattern = "prophet"))
+rm(list = ls(pattern = "Resample"))
+rm(list = ls(pattern = "plot"))
+rm(list = ls(pattern = "train"))
+rm(list = ls(pattern = "trn"))
+rm(holiday_dates, rds_files, roll_rs, x, y)
 
 ```
-
-
-### Limited Variables
-
-```{r}
-
-add_trn_val_test %>% 
-  map(~ group_by(.x,
-                 data_use_el_stop_id
-                 ) %>% 
-        summarise(date_min = min(el_date),
-                  date_max = max(el_date)
-                  )
-      )
-
-
-# One-Hot
-one_hot <-
-  add_trn_val_test %>% 
-  map(~ func_one_hot_vars(.x))
-
-# glimpse(add_trn_val_test$`40600`)
-# glimpse(one_hot$`40600`)
-
-
-# select specific columns to use
-col_names <-
-  DV_corr_predict %>% 
-  map(~ colnames(.x))
-
-
-select_cols <-
-  pmap(.l = list(a = one_hot,
-                 b = col_names
-                 ),
-       .f = function(a, b) {
-         res = a[, colnames(a) %in% b]
-         
-         return(res)
-         }
-       )
-
-# select_cols %>% map(~dim(.x))
-
-
-# create train-val-test for h20
-train_tbl <-
-  select_cols %>% 
-  map(~ (filter(.x,
-                data_use_el_stop_id == "01_train"
-                )
-         )
-      )
-
-valid_tbl <-
-  select_cols %>% 
-  map(~ (filter(.x,
-                data_use_el_stop_id == "02_validation"
-                )
-         )
-      )
-
-test_tbl <-
-  select_cols %>% 
-  map(~ (filter(.x,
-                data_use_el_stop_id == "03_test"
-                )
-         )
-      )
-
-
-# Fire up h2o
-h2o.init()
-
-
-# Convert to H2OFrame objects
-train_h2o <- train_tbl %>% map(~ as.h2o(.x))
-valid_h2o <- valid_tbl %>% map(~ as.h2o(.x))
-test_h2o  <- test_tbl %>% map(~ as.h2o(.x))
-
-
-# Set names for h2o
-y <- "el_rides"
-x <- train_h2o %>% 
-  map(~ setdiff(names(.x),
-                y
-                )
-      )
-
-
-# linear regression model used, but can use any model
-# user   system  elapsed 
-#   32.875   29.217 1870.200 
-# ~ 31 min
-start <- proc.time()
-
-automl_models_h2o_b <-
-  pmap(.l = list(a = x,
-                 b = train_h2o,
-                 c = valid_h2o,
-                 d = test_h2o
-                 ),
-       .f = function(a, b, c, d) {
-         h2o.automl(
-           x = a,
-           y = y,
-           training_frame = b,
-           validation_frame = c,
-           leaderboard_frame = d,
-           nfolds = 13,
-           max_runtime_secs = 300,
-           stopping_metric = "deviance"
-           )
-         }
-       )
-
-time.h2o_b <- proc.time() - start
-rm(start)
-
-time.h2o_b
-
-# print(automl_models_h2o$`40600`@leaderboard)
-
-
-# Extract leader model
-automl_leader_b <-
-  pmap(.l = list(a = automl_models_h2o_b),
-       .f = function(a) {
-         ldr = a@leader
-         
-         return(ldr)
-         }
-       )
-
-
-# save the leader
-saveRDS(automl_leader_b,
-        paste0(wd,
-               "/Models/",
-               "automl_leader_b.Rds"
-               )
-        )
-
-
-# automl_leader_b <-
-#   readRDS(paste0(wd,
-#                  "/Models/",
-#                  "automl_leader_b.Rds"
-#                  )
-#           )
-
-
-# get predictions on test set
-pred_h2o_b <-
-  pmap(.l = list(a = automl_leader_b,
-                 b = test_h2o
-                 ),
-       .f = function(a, b) {
-         res = h2o.predict(a, newdata = b)
-         
-         return(res)
-         }
-       )
-
-
-# measure performance on test dataset
-perf_b <-
-  pmap(.l = list(a = automl_leader_b,
-                 b = test_h2o),
-       .f = function(a, b) {
-         per = h2o.performance(a, newdata = b)
-         
-         return(per)
-         }
-       )
-
-perf_b
-
-
-# save the leader performance
-saveRDS(perf_b,
-        paste0(wd,
-               "/Models/",
-               "perf_b.Rds"
-               )
-        )
-
-
-```
-
-
+ 
+ 
