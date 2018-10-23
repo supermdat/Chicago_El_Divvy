@@ -1855,6 +1855,13 @@ saveRDS(remove_prcp_vars,
                )
         )
 
+# remove_prcp_vars <-
+#   readRDS(paste0(wd,
+#                  "/Data/Interim/",
+#                  "remove_prcp_vars.Rds"
+#                  )
+#           )
+
 
 str(remove_prcp_vars)
 
@@ -2039,7 +2046,7 @@ rm(func_sum_stats_by_col)
     
   Now I just put all of the six datasets together as one, and then calculate some summary statistics.  
     
-  Overall, using a lage of 7 has varying results depending on the variable. For example, using the median of the six MAE values, `divvy_pt5mi_triptime_mean_cus` is fairly accurate, whereas `divvy_all_triptime_mean_cus`. Interestingly, all of the values for `...pt5mi...` are the most accurate. Hopefully, this accuracy will be sufficient for predicing `el_rides`.
+  Overall, using a lag of 7 has varying results depending on the variable. For example, using the median of the six MAE values, `divvy_pt5mi_triptime_mean_cus` is fairly accurate, whereas `divvy_all_triptime_mean_cus`. Interestingly, all of the values for `...pt5mi...` are the most accurate. Hopefully, this accuracy will be sufficient for predicing `el_rides`.
 ```{r}
 
 acrcy_stats_lag_1df <-
@@ -3737,7 +3744,10 @@ models <-
        .f = function(a) {
          
          splits_p = a$splits %>%
-           map(fit_model_prophet)
+           map(~ fit_model_prophet(.x,
+                                   
+                                   )
+               )
          
          a$prophet = splits_p
          
@@ -4176,7 +4186,7 @@ h2o_data <-
          }
        )
 
-
+# h2o_data$`40600`$interp_data[[1]] %>% as.data.frame() %>% dim()
 rm(prophet.plots)
 
 
@@ -4195,9 +4205,9 @@ x <- h2o_train %>%
       )
 
 
-# user   system  elapsed 
-#  407.637   86.055 1231.047
-# ~ 20 min
+# user  system elapsed 
+#   9.730   5.819 215.764
+# ~ 4 min
 start <- proc.time()
 
 h2o_automl_models <-
@@ -4234,6 +4244,13 @@ saveRDS(h2o.time,
                )
         )
 
+# h2o.time <-
+#   readRDS(paste0(wd,
+#                  "/Models/",
+#                  "h2o.time.Rds"
+#                  )
+#           )
+
 # print(automl_models_h2o$`40600`@leaderboard)
 
 
@@ -4256,29 +4273,12 @@ saveRDS(h2o_automl_leader,
                )
         )
 
-# pmap(.l = list(a = automl_leader,
-#                b = names(automl_leader)
-#                ),
-#      .f = function(a, b) {
-#        h2o.saveModel(object = a,
-#                      path = paste0(wd,
-#                                    "/Models/",
-#                                    b,
-#                                    "_"#,
-#                                    # "automl_leader.Rds"
-#                                    ),
-#                      force = TRUE
-#                      )
-#        }
-#      )
-
-
-# automl_leader <-
-#   h2o.loadModel(path = paste0(wd,
-#                               "/Models/",
-#                               "GBM_grid_0_AutoML_20181009_102645_model_0"
-#                               )
-#                 )
+# h2o_automl_leader <-
+#   readRDS(paste0(wd,
+#                  "/Models/",
+#                  "h2o_automl_leader.Rds"
+#                  )
+#           )
 
 
 # get predictions on test set
@@ -4309,7 +4309,7 @@ h2o_forecasts <-
                   return(pred)
                   }
                 )
-         
+
          ext_pred =
            pmap(.l = list(d = a$extrap_data),
                 .f = function(d) {
@@ -4320,7 +4320,7 @@ h2o_forecasts <-
                   }
                 )
          
-         # interp_data_h2o$`40600`$interp_data[[1]] %>% as.data.frame() %>% select(el_rides)
+         
          int_data =
            pmap(.l = list(e = a$interp_data),
                 .f = function(e) {
@@ -4380,16 +4380,11 @@ h2o_forecasts <-
          }
        )
 
-
+# add_el_stop_id$`40600`$h2o.extrap.forecast[[1]] %>% str()
 rm(h2o_data)
 
-# h2o_forecasts$`40600` %>% names()
-# h2o_forecasts$`40600`$h2o.interp.forecast[[1]] %>%
-#   pull(sqrd_error) %>% 
-#   mean(na.rm = TRUE) %>%
-#   sqrt()
 
-
+# accuracy
 h2o_accuracy_stats <-
   pmap(.l = list(a = h2o_forecasts),
        .f = function(a) {
@@ -4538,34 +4533,6 @@ rm(select_cols)
 # h2o.init()
 
 
-# Create the Interpolation & Extrapolation Datasets
-# h2o.limvars_data <-
-#   pmap(.l = list(a = prophet.plots),
-#        .f = function(a) {
-#          dat_interp = a$splits %>% 
-#            map(~ analysis(.x) %>% 
-#                  func_one_hot_vars() %>% 
-#                  as.h2o()
-#                )
-#          
-#          dat_extrap = a$splits %>% 
-#            map(~ assessment(.x) %>% 
-#                  func_one_hot_vars() %>% 
-#                  as.h2o()
-#                )
-#          
-#          a$interp_data = dat_interp
-#          a$extrap_data = dat_extrap
-#          
-#          return(a)
-#          }
-#        )
-# 
-# 
-# rm(prophet.plots)
-
-
-
 # Convert to H2OFrame objects
 h2o.limvars_train <- h2o.limvars_train_tbl %>% map(~ as.h2o(.x))
 h2o.limvars_valid <- h2o.limvars_valid_tbl %>% map(~ as.h2o(.x))
@@ -4581,9 +4548,9 @@ x <- h2o.limvars_train %>%
       )
 
 
-# user   system  elapsed 
-#   22.491   17.177 1135.913 
-# ~ 19 min
+# user  system elapsed 
+#   7.985   3.463 208.442 
+# ~ 4 min
 start <- proc.time()
 
 h2o.limvars_automl_models <-
@@ -4642,29 +4609,12 @@ saveRDS(h2o.limvars_automl_leader,
                )
         )
 
-# pmap(.l = list(a = automl_leader,
-#                b = names(automl_leader)
-#                ),
-#      .f = function(a, b) {
-#        h2o.saveModel(object = a,
-#                      path = paste0(wd,
-#                                    "/Models/",
-#                                    b,
-#                                    "_"#,
-#                                    # "automl_leader.Rds"
-#                                    ),
-#                      force = TRUE
-#                      )
-#        }
-#      )
-
-
-# automl_leader <-
-#   h2o.loadModel(path = paste0(wd,
-#                               "/Models/",
-#                               "GBM_grid_0_AutoML_20181009_102645_model_0"
-#                               )
-#                 )
+# h2o.limvars_automl_leader <-
+#   readRDS(paste0(wd,
+#                  "/Models/",
+#                  "h2o.limvars_automl_leader.Rds"
+#                  )
+#           )
 
 
 # get predictions on test set
@@ -4769,12 +4719,6 @@ h2o.limvars_forecasts <-
 
 rm(h2o_accuracy_stats)
 
-# h2o.limvars_forecasts$`40600` %>% names()
-# h2o.limvars_forecasts$`40600`$h2o.interp.forecast[[1]] %>%
-#   pull(sqrd_error) %>% 
-#   mean(na.rm = TRUE) %>%
-#   sqrt()
-
 
 h2o.limvars_accuracy_stats <-
   pmap(.l = list(a = h2o.limvars_forecasts),
@@ -4861,7 +4805,7 @@ saveRDS(h2o.limvars_perf,
 #           )
 
 
-h2o.removeAll()
+# h2o.removeAll()
 
 ```
 
@@ -5944,7 +5888,7 @@ func_get_forecast_data <-
             return(extrap)
             }
           )
-  
+  # add_el_stop_id$`40600`$splits %>% assessment() %>% select(el_date, el_stop_id, el_rides) %>% rename(actual = el_rides) %>% nrow()
   data_arima_list =
     el_stop_id$arima.forecast %>% 
     map(~ select(.x,
@@ -6006,14 +5950,19 @@ func_get_forecast_data <-
                  ) %>% 
           rename(yhat.xgb = yhat_zero_floor)
         )
-  # add_el_stop_id$`40600`$h2o.limvars.extrap.forecast[[1]] %>% str()
+  # add_el_stop_id$`40600`$h2o.limvars.extrap.forecast[[1]] %>% 
+  #   rename(yhat.h2o = yhat) %>%  
+  #   mutate(el_date = as_date(el_date)
+  #          ) %>% 
+  #   str()
   data_h2o_list = 
     el_stop_id$h2o.extrap.forecast %>% 
     map(~ rename(.x,
                  yhat.h2o = yhat
                  ) %>% 
-          mutate(el_date = as_date(el_date)
-                 )
+          # mutate(el_date = as_date(el_date)
+          #        ) %>% 
+          select(yhat.h2o)
         )
   
   data_h2o_limvars_list = 
@@ -6021,8 +5970,9 @@ func_get_forecast_data <-
     map(~ rename(.x,
                  yhat.h2o_limvars = yhat
                  ) %>% 
-          mutate(el_date = as_date(el_date)
-                 )
+          # mutate(el_date = as_date(el_date)
+          #        ) %>% 
+          select(yhat.h2o_limvars)
         )
   
   full_data_list =
@@ -6056,12 +6006,14 @@ func_get_forecast_data <-
              left_join(g,
                        by = "el_date"
                        ) %>% 
-             left_join(h,
-                       by = "el_date"
-                       ) %>% 
-             left_join(i,
-                       by = "el_date"
-                       )
+             # left_join(h,
+             #           by = "el_date"
+             #           ) %>% 
+             # left_join(i,
+             #           by = "el_date"
+             #           ) %>% 
+             bind_cols(h) %>% 
+             bind_cols(i)
            }
          )
   
@@ -6083,6 +6035,7 @@ forecast_data_list <-
   Now I munge the resulting data for plotting.
 ```{r}
 
+# View(forecast_data_list$`40600`)
 forecast_data_to_plot_list <-
   forecast_data_list %>% 
   map(~ gather(.x,
@@ -6188,6 +6141,57 @@ rm(clrs, lne_, forecast_data_to_plot_list, func_get_forecast_data)
  
  
  
+ 
+
+```{r}
+
+library("lime")
+
+local_obs <-
+  # h2o_train_tbl$`40600` %>%
+  # DV_nzv_predict$`40600` %>% 
+  h2o.limvars_train_tbl$`40600` %>%
+  filter(data.table::between(x = el_date,
+                             # lower = as_date("2015-12-21"),
+                             lower = as_date("2015-12-30"),
+                             upper = as_date("2016-01-04"),
+                             incbounds = TRUE
+                             )
+         )
+
+# View(h2o_train_tbl$`40600`)
+# View(DV_nzv_predict$`40600`)
+h2o_explainer <- 
+  lime::lime(
+             # x = h2o_train_tbl$`40600`,
+             # x = DV_nzv_predict$`40600`,
+             x = h2o.limvars_train_tbl$`40600`,
+             # model = h2o_automl_leader$`40600`,
+             # model = DV_Fit.Rf.corr_no$`40600`,
+             model = h2o.limvars_automl_leader$`40600`,
+             n_bins = 5
+             )
+
+h2o_explanation <-
+  lime::explain(local_obs,
+                h2o_explainer,
+                n_features = 5,
+                kernel_width = .1,
+                feature_select  = "highest_weights"
+                # feature_select = "lasso_path"
+                )
+
+# h2o_explanation
+
+plot_features(h2o_explanation)
+plot_explanations(h2o_explanation)
+
+```
+
+
+
+
+ 
 ```{r}
 
 rm(list = ls(pattern = "h2o"))
@@ -6206,5 +6210,6 @@ rm(list = ls(pattern = "trn"))
 rm(holiday_dates, rds_files, roll_rs, x, y)
 
 ```
- 
- 
+
+
+
