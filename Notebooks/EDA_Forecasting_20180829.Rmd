@@ -6872,7 +6872,8 @@ cols <- map(coln,
 #       )
 
 mape_train <-
-  map_dbl(cols,
+  map_dbl(#cols,
+          coln,
           function(col) {
             data = compare_train %>% 
               mutate(pct_error = el_rides - !!col / el_rides * 100
@@ -6892,7 +6893,7 @@ View(compare_train)
 
 
 library("yardstick")
-rsme_train <-
+rmse_train <-
   map_dbl(#cols,
           coln,
           function(col)
@@ -6904,7 +6905,7 @@ rsme_train <-
           ) %>% 
   mean()
 
-rsme_train
+rmse_train
 # rmse(compare_train,
 #      truth = el_rides,
 #      estimate = pred_train1,
