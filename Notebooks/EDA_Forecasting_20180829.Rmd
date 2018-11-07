@@ -43,6 +43,7 @@ library("keras")
 # use_session_with_seed(123456789) # setting the seed to obtain reproducible results
 # see https://keras.rstudio.com/articles/faq.html#how-can-i-obtain-reproducible-results-using-keras-during-development and https://cran.r-project.org/web/packages/keras/vignettes/faq.html
 # can also re-enable gpu and parallel processing by using:  use_session_with_seed(42, disable_gpu = FALSE, disable_parallel_cpu = FALSE)
+library("yardstick")            # easily calculate accuracy stats
 
 
 # other
@@ -3355,7 +3356,7 @@ Resample_Results.Xgbtree %>%
   After inspecting the results, we choose to keep the model that does NOT include the correlation filter in the preprocessing stage - the results were similar, and the run time was about half as long.
 ```{r}
 
-rm(list = ls(pattern = "corr_no"))
+rm(list = ls(pattern = "Xgbtree.corr_no"))
 
 
 saveRDS(DV_Fit.Xgbtree.corr_yes,
@@ -3446,8 +3447,17 @@ roll_rs %>%
 
 
 names(roll_rs$`40600`)
-roll_rs$`40600`$splits[[1]]
-
+roll_rs %>% 
+  map(~ length(.x$splits)
+      )
+# roll_rs$`40600`$splits[[1]]
+# train_data %>% 
+#   map(~ summarise(.x,
+#                   min_d = min(el_date),
+#                   max_d = max(el_date),
+#                   days = n()
+#                   )
+#       )
 
 # rm(period_train, period_test, skip_span)
 
@@ -5653,11 +5663,9 @@ accuracy_extrap_prophet %>%
 rm(accuracy_extrap_arima_xreg)
 
 ```
-
-
-## Visualize the Accuracy Measures
-
- Add an identifier for the relevant `el_stop_id` value.
+  
+    
+  Add an identifier for the relevant `el_stop_id` value.
 ```{r}
   
 add_el_stop_id <-
@@ -5679,15 +5687,16 @@ saveRDS(add_el_stop_id,
                )
         )
 
-# add_el_stop_id <-
-#   readRDS(paste0(wd,
-#                  "/Models/",
-#                  "add_el_stop_id.Rds"
-#                  )
-#           )
+add_el_stop_id <-
+  readRDS(paste0(wd,
+                 "/Models/",
+                 "add_el_stop_id.Rds"
+                 )
+          )
 
 
 names(add_el_stop_id$`40600`)
+names(add_el_stop_id$`40910`)
 
 
 rm(accuracy_extrap_prophet)
@@ -5726,8 +5735,1831 @@ saveRDS(run_times,
 #           )
 
 ```
+
+
+## Testing Using Keras for LSTM
+### Based on examples from [http://www.business-science.io/timeseries-analysis/2018/07/01/keras-lstm-sunspots-part2.html](http://www.business-science.io/timeseries-analysis/2018/07/01/keras-lstm-sunspots-part2.html) and [https://tensorflow.rstudio.com/blog/sunspots-lstm.html](https://tensorflow.rstudio.com/blog/sunspots-lstm.html)  
   
-   
+  Try an example on just the most recent split for one `el_stop_id`.  
+    
+  First, setup the infrastructure.
+```{r}
+
+example_split <- add_el_stop_id$`40600`$splits[[13]]
+example_split_id <- add_el_stop_id$`40600`$id[[13]]
+
+
+##### split into train (2/3 of original train data), validation (1/3 of original train data), and test (original validation data)
+keras_split_pt <-
+  ((analysis(example_split) %>% 
+      nrow()
+    ) * (2/3)
+   ) %>% 
+  round(digits = 0) 
+  
+df_trn <-
+  analysis(example_split)[1:keras_split_pt,
+                           ,
+                          drop = FALSE
+                          ] %>% 
+  select(el_date, el_rides)
+
+df_val <-
+  analysis(example_split)[(keras_split_pt + 1):nrow(analysis(example_split)
+                                                    ),
+                           ,
+                          drop = FALSE
+                          ] %>% 
+  select(el_date, el_rides)
+
+df_tst <- assessment(example_split) %>% 
+  select(el_date, el_rides)
+
+
+rm(keras_split_pt)
+
+
+df <- bind_rows(
+  df_trn %>% add_column(key = "01_training"),
+  df_val %>% add_column(key = "02_validation"),
+  df_tst %>% add_column(key = "03_testing")
+  ) %>% 
+  as_tbl_time(index = el_date) %>% 
+  select(el_date,
+         key,
+         el_rides
+         )
+
+# View(df)
+
+df %>% 
+  group_by(key) %>% 
+  summarize(min_date = min(el_date),
+            max_date = max(el_date),
+            rows = n()
+         ) %>% 
+  ungroup()
+
+
+# rm(list = ls(pattern = "df_"))
+rm(list = ls(pattern = "example_split"))
+
+
+##### Center & Scaling the data
+rec_obj <- recipe(el_rides ~ ., df) %>% 
+  step_sqrt(el_rides) %>% 
+  step_center(el_rides) %>% 
+  step_scale(el_rides) %>% 
+  prep()
+
+df_processed_tbl <- bake(rec_obj, df)
+
+View(df_processed_tbl)
+
+center_history <- rec_obj$steps[[2]]$means["el_rides"]
+scale_history  <- rec_obj$steps[[3]]$sds["el_rides"]
+
+c("center" = center_history, "scale" = scale_history)
+
+
+##### Shaping the data for LSTM modeling
+# These variables are being defined just because of the order in which we present things in this post (first the data, then the model). They will be superseded by FLAGS$n_timesteps, FLAGS$batch_size and n_predictions in the following snippet
+
+# From [http://www.business-science.io/timeseries-analysis/2018/07/01/keras-lstm-sunspots-part2.html](http://www.business-science.io/timeseries-analysis/2018/07/01/keras-lstm-sunspots-part2.html)
+# Keras LSTM expects the input as well as the target data to be in a specific shape. The input has to be a 3-d array of size num_samples, num_timesteps, num_features.
+# 
+# Here, num_samples is the number of observations in the set. This will get fed to the model in portions of batch_size. The second dimension, num_timesteps, is the length of the hidden state we were talking about above. Finally, the third dimension is the number of predictors we’re using. For univariate time series, this is 1.
+
+n_timesteps <- 7
+n_predictions <- n_timesteps
+batch_size <- 28
+
+# t(sapply(1:(length(train_vals) - (14 + 14) + 1),
+#          function(x)
+#            train_vals[x:(x + (14 + 14) - 1)]
+#          )
+#   )
+
+
+# functions used
+build_matrix <- function(tseries, overall_timesteps) {
+  t(sapply(1:(length(tseries) - overall_timesteps + 1),
+           function(x) 
+             tseries[x:(x + overall_timesteps - 1)]
+           )
+    )
+  }
+
+reshape_X_3d <- function(X) {
+  dim(X) <- c(dim(X)[1],
+              dim(X)[2],
+              1
+              )
+  X
+  }
+
+
+###### extract el_rides from data frame
+train_vals <- df_processed_tbl %>% 
+  filter(key == "01_training") %>%
+  select(el_rides) %>%
+  pull()
+
+valid_vals <- df_processed_tbl %>%
+  filter(key == "02_validation") %>%
+  select(el_rides) %>%
+  pull()
+
+test_vals <- df_processed_tbl %>%
+  filter(key == "03_testing") %>%
+  select(el_rides) %>%
+  pull()
+
+
+###### build the windowed matrices
+train_matrix <- build_matrix(train_vals, n_timesteps + n_predictions)
+valid_matrix <- build_matrix(valid_vals, n_timesteps + n_predictions)
+test_matrix <- build_matrix(test_vals, n_timesteps + n_predictions)
+
+###### separate matrices into training and testing parts
+# also, discard last batch if there are fewer than batch_size samples (a purely technical requirement)
+# nrow(X_train) %/% 360 * 360
+# nrow(X_valid) %/% 360 * 360
+X_train <- train_matrix[, 1:n_timesteps]
+y_train <- train_matrix[, (n_timesteps + 1):(n_timesteps * 2)]
+X_train <- X_train[1:(nrow(X_train) %/% batch_size * batch_size), ]
+y_train <- y_train[1:(nrow(y_train) %/% batch_size * batch_size), ]
+
+X_valid <- valid_matrix[, 1:n_timesteps]
+y_valid <- valid_matrix[, (n_timesteps + 1):(n_timesteps * 2)]
+X_valid <- X_valid[1:(nrow(X_valid) %/% batch_size * batch_size), ]
+y_valid <- y_valid[1:(nrow(y_valid) %/% batch_size * batch_size), ]
+
+X_test <- test_matrix[, 1:n_timesteps]
+y_test <- test_matrix[, (n_timesteps + 1):(n_timesteps * 2)]
+X_test <- X_test[1:(nrow(X_test) %/% batch_size * batch_size), ]
+y_test <- y_test[1:(nrow(y_test) %/% batch_size * batch_size), ]
+
+# add on the required third axis
+X_train <- reshape_X_3d(X_train)
+X_valid <- reshape_X_3d(X_valid)
+X_test <- reshape_X_3d(X_test)
+
+y_train <- reshape_X_3d(y_train)
+y_valid <- reshape_X_3d(y_valid)
+y_test <- reshape_X_3d(y_test)
+
+
+
+# to find the optimal parameter settings, looping through for a make-shift grid-search of parameters
+
+# original settings in sequential loop
+  # for (#lrn_rate in seq(0.00, 0.003, 0.001)
+  #      lrn_rate in seq(0.00, 0.001, 0.001)
+  #      ) {
+  #   for #(rec_drpout in seq(0.0, 0.2, 0.1)
+  #       (rec_drpout in seq(0.0, 0.1, 0.1)
+  #        ) {
+  #     for #(drpout in seq(0.0, 0.2, 0.1)
+  #         (drpout in seq(0.1, 0.1, 0.1)
+  #     ) {
+  #       for #(momntm in seq(0.7, 0.9, 0.1)
+  #           (momntm in seq(0.9, 0.9, 0.1)
+  #       ) {
+
+
+
+# # Root Mean Squared Error (needed for accuracy stats)
+# rmse_metric <-
+#   custom_metric("rmse_metric",
+#                 function(y_true, y_pred) {
+#                   K <- backend()
+#                   K$sqrt(K$mean(K$square(K$relu(y_pred - y_true)
+#                                          )
+#                                 )
+#                          )
+#                   }
+#                 )
+
+```
+  
+    
+  Now, loop through various parameters settings.
+```{r}
+
+# devtools::install_github("rstudio/keras")
+# install_keras()  # should only have to install once
+# user  system elapsed 
+#   4.610   5.864 700.531
+# ~ 12 min
+start <- proc.time()
+
+tot_cores <- detectCores()
+cl <- makeCluster(tot_cores - 1)
+registerDoParallel(cl)
+
+# 3 * 2 * 2 * 3 * 2 = 72 different combinations tried
+# set the outer-most-loop with lrn_rate as it has the most number of possibilities
+
+keras_parameter_tuning_trials <-
+  foreach(lrn_rate = seq(0.001, 0.003, 0.001), # seq(0.00, 0.003, 0.001)
+          .packages = c("tfruns", "keras", "tidyverse", "purrr", "yardstick"),
+          .combine = c,
+          .verbose = FALSE
+          ) %:%
+  foreach(rec_drpout = seq(0.1, 0.2, 0.1), # seq(0.0, 0.2, 0.1)
+          .packages = c("tfruns", "keras", "tidyverse", "purrr", "yardstick"),
+          .combine = c,
+          .verbose = FALSE
+          ) %:%
+  foreach(drpout = seq(0.1, 0.2, 0.1), # seq(0.0, 0.2, 0.1)
+          packages = c("tfruns", "keras", "tidyverse", "purrr", "yardstick"),
+          .combine = c,
+          .verbose = FALSE
+          ) %:% 
+  foreach(decay = seq(0.001, 0.003, 0.001), # seq(0.002, 0.003, 0.001)
+          packages = c("tfruns", "keras", "tidyverse", "purrr", "yardstick"),
+          .combine = c,
+          .verbose = FALSE
+          ) %:% 
+  foreach(momntm = seq(0.8, 0.9, 0.1), # eq(0.7, 0.9, 0.1)
+          packages = c("tfruns", "keras", "tidyverse", "purrr", "yardstick"),
+          .combine = c,
+          .verbose = FALSE
+          ) %dopar% {
+            
+###### Build the LSTM Model
+FLAGS <- flags(
+  # There is a so-called "stateful LSTM" in Keras. While LSTM is stateful per se,
+  # this adds a further tweak where the hidden states get initialized with values 
+  # from the item at same position in the previous batch.
+  # This is helpful just under specific circumstances, or if you want to create an
+  # "infinite stream" of states, in which case you'd use 1 as the batch size.
+  # Below, we show how the code would have to be changed to use this, but it won't be further
+  # discussed here.
+  flag_boolean("stateful", FALSE),
+  # Should we use several layers of LSTM?
+  # Again, just included for completeness, it did not yield any superior performance on this task.
+  # This will actually stack exactly one additional layer of LSTM units.
+  flag_boolean("stack_layers", FALSE),
+  # number of samples fed to the model in one go
+  flag_integer("batch_size", 28),  # 180
+  # size of the hidden state, equals size of predictions
+  flag_integer("n_timesteps", 7),
+  # how many epochs to train for
+  flag_integer("n_epochs", 100),
+  # loss function. Found to work better for this specific case than mean squared error
+  flag_string("loss", "logcosh"),  # mape
+  # optimizer = stochastic gradient descent. Seemed to work better than adam or rmsprop here
+  # (as indicated by limited testing)
+  flag_string("optimizer_type", "adam"),  # sgd
+  # size of the LSTM layer
+  flag_integer("n_units", 128),
+  # parameter to the early stopping callback
+  flag_integer("patience", 10),
+  
+  # fraction of the units to drop for the linear transformation of the inputs
+  flag_numeric("dropout", 0.2), # 0.2  drpout
+  # fraction of the units to drop for the linear transformation of the recurrent state
+  flag_numeric("recurrent_dropout", 0.2), # 0.2  rec_drpout
+  # learning rate
+  flag_numeric("lr", 0.003), # 0.003  lrn_rate
+  # learning rate decay
+  flag_numeric("decay", 0.003), # 0.003  decay
+  # momentum, an additional parameter to the SGD optimizer
+  flag_numeric("momentum", 0.9) # 0.9  momntm
+)
+
+# the number of predictions we'll make equals the length of the hidden state
+n_predictions <- FLAGS$n_timesteps
+# how many features = predictors we have
+n_features <- 1
+# just in case we wanted to try different optimizers, we could add here
+optimizer <- switch(FLAGS$optimizer_type,
+                    sgd = optimizer_sgd(lr = FLAGS$lr,
+                                        momentum = FLAGS$momentum
+                                        ),
+                    adam = optimizer_adam(lr = FLAGS$lr,
+                                          decay = FLAGS$decay
+                                          )
+                    )
+
+# callbacks to be passed to the fit() function
+# We just use one here: we may stop before n_epochs if the loss on the validation set
+# does not decrease (by a configurable amount, over a configurable time)
+callbacks <-
+  list(callback_early_stopping(patience = FLAGS$patience)
+       )
+
+
+##### Run longer version
+model <- keras_model_sequential()
+
+model %>%
+  layer_lstm(
+    units = FLAGS$n_units,
+    batch_input_shape  = c(FLAGS$batch_size, FLAGS$n_timesteps, n_features),
+    dropout = FLAGS$dropout,
+    recurrent_dropout = FLAGS$recurrent_dropout,
+    return_sequences = TRUE,
+    stateful = FLAGS$stateful
+  )
+
+if (FLAGS$stack_layers) {
+  model %>%
+    layer_lstm(
+      units = FLAGS$n_units,
+      dropout = FLAGS$dropout,
+      recurrent_dropout = FLAGS$recurrent_dropout,
+      return_sequences = TRUE,
+      stateful = FLAGS$stateful
+    )
+  }
+
+model %>% time_distributed(layer_dense(units = 1))
+
+
+# summary(model)
+
+
+# Root Mean Squared Error (needed for accuracy stats)
+# (must be defined within the Keras loop)
+rmse_metric <-
+  custom_metric("rmse_metric",
+                function(y_true, y_pred) {
+                  K <- backend()
+                  K$sqrt(K$mean(K$square(K$relu(y_pred - y_true)
+                                         )
+                                )
+                         )
+                  }
+                )
+
+
+model %>%
+  compile(
+    loss = FLAGS$loss,
+    optimizer = optimizer,
+    metrics = list(mape = "mean_absolute_percentage_error",
+                   mse = "mean_squared_error",
+                   rmse_metric
+                   )
+  )
+
+if (!FLAGS$stateful) {
+  history <-
+    model %>% 
+    fit(
+      x = X_train,
+      y = y_train,
+      validation_data = list(X_valid, y_valid),
+      batch_size = FLAGS$batch_size,
+      epochs     = FLAGS$n_epochs,
+      callbacks = callbacks,
+      verbose = 0
+      )
+  } else {
+    history <-
+      for (i in 1:FLAGS$n_epochs) {
+        model %>% 
+          fit(
+            x = X_train,
+            y = y_train,
+            validation_data = list(X_valid, y_valid),
+            callbacks = callbacks,
+            batch_size = FLAGS$batch_size,
+            epochs = 1,
+            shuffle = FALSE,
+            verbose = 0
+            )
+        
+        model %>% reset_states()
+        }
+    }
+
+if (FLAGS$stateful)
+  model %>% reset_states()
+
+
+# plot(history)
+# plot(history, metrics = "loss")
+# plot(history, metrics = "rmse_metric")
+
+
+# model %>% evaluate(X_train, y_train, verbose = 0)
+
+
+# model
+# model_s
+
+
+#### Calculate MAPE
+## Training Set
+pred_train <- model %>%
+  predict(X_train, batch_size = FLAGS$batch_size) %>%
+  .[, , 1]
+
+# Retransform values to original scale
+pred_train_norm <- (pred_train * scale_history + center_history) ^2
+
+compare_train <- df %>% filter(key == "01_training")
+
+
+# build a dataframe that has both actual and predicted values
+for (i in 1:nrow(pred_train_norm)
+     ) {
+  varname <- paste0("pred_train", i)
+  
+  compare_train <-
+    mutate(compare_train,
+           !!varname := c(rep(NA,
+                              FLAGS$n_timesteps + i - 1
+                              ),
+                          pred_train_norm[i,],
+                          rep(NA, 
+                              nrow(compare_train) - FLAGS$n_timesteps * 2 - i + 1
+                              )
+                          )
+           )
+  }
+
+coln <- colnames(compare_train)[4:ncol(compare_train)]
+cols <- coln %>% 
+  map(~ sym(.x)
+      )
+
+# mape_train <-
+#   map_dbl(cols,
+#           function(col) {
+#             data = compare_train %>%
+#               mutate(#error = el_rides - !!col,
+#                      pct_error = el_rides - !!col / el_rides * 100
+#                      )
+# 
+#             mape = data$pct_error %>%
+#               abs() %>%
+#               mean(na.rm = TRUE)
+#             
+#             # rmse = (data$error)^2 %>% 
+#             #   mean(na.rm = TRUE) %>% 
+#             #   sqrt()
+# 
+#             # return(list(mape_ = mape,
+#             #             rmse_ = rmse
+#             #             )
+#             #        )
+#             return(mape)
+#             }
+#           ) %>%
+#   mean()
+# 
+# mape_train
+
+rmse_train <-
+  map(cols,
+      function(col)
+        rmse(data = compare_train,
+             truth = el_rides,
+             estimate = !!col,
+             na.rm = TRUE
+             ) %>% 
+        select(.estimate)
+      ) %>% 
+  bind_rows()
+
+rmse_train <- mean(rmse_train$.estimate, na.rm = TRUE)
+
+rmse_train
+
+name <- paste0("learningrate_",
+               lrn_rate,
+               "___",
+               "dropout_",
+               drpout,
+               "___",
+               "recurrentdropout_",
+               rec_drpout,
+               "___",
+               "momentum_",
+               momntm,
+               "___",
+               "decay_",
+               decay
+               )
+
+# tri_list <- list()
+# tri_list[[name]] <- list(model_train = model,
+#                          mape_train = mape_train,
+#                          compare_train = compare_train
+#                          )
+#     
+#     return(tri_list)
+
+rmse_train_list <- list()
+rmse_train_list[[name]] <- rmse_train
+
+return(rmse_train_list)
+    }
+
+
+stopCluster(cl)
+rm(cl)
+
+runtime_dopar <- proc.time() - start
+runtime_dopar
+rm(start)
+
+# saving is done to avoid having to run the models again
+# saveRDS(keras_parameter_tuning_trials,
+#         paste0(wd,
+#                "/Data_Processed/",
+#                "keras_parameter_tuning_trials.Rds"
+#                )
+#         )
+# 
+# saveRDS(runtime_dopar,
+#         paste0(wd,
+#                "/Data_Processed/",
+#                "runtime_dopar.Rds"
+#                )
+#         )
+
+
+# keras_parameter_tuning_trials <-
+#   readRDS(paste0(wd,
+#                  "/Data_Processed/",
+#                  "keras_parameter_tuning_trials.Rds"
+#                  )
+#           )
+# 
+# runtime_dopar <-
+#   readRDS(paste0(wd,
+#                  "/Data_Processed/",
+#                  "runtime_dopar.Rds"
+#                  )
+#           )
+
+```
+  
+    
+  Munge to get a more presentable listing (as a dataframe) of models tried.
+```{r warning = FALSE}
+
+rmse_vals_list <-
+  pmap(.l = list(a = keras_parameter_tuning_trials,
+                 b = names(keras_parameter_tuning_trials)
+                 ),
+       .f = function(a, b) {
+         rmse_val = a
+         
+         df = data.frame(parameters = b,
+                         rmse = rmse_val
+                         )
+         
+         return(df)
+         }
+       )
+
+rmse_vals_df <-
+  bind_rows(rmse_vals_list) %>% 
+  separate(col = parameters,
+           into = c("learn_rate",
+                    "dropout",
+                    "recurrent_dropout",
+                    "momentum",
+                    "decay"
+                    ),
+           sep = "___",
+           remove = FALSE
+           ) %>% 
+  separate(col = learn_rate,
+           into = c("lrn_rate",
+                    "lrn_rate_value"
+                    ),
+           sep = "_"
+           ) %>% 
+  separate(col = dropout,
+           into = c("drpout",
+                    "drpout_value"
+                    ),
+           sep = "_"
+           ) %>% 
+  separate(col = recurrent_dropout,
+           into = c("rec_drpout",
+                    "rec_drpout_value"
+                    ),
+           sep = "_"
+           ) %>% 
+  separate(col = momentum,
+           into = c("momtum",
+                    "momtum_value"
+                    ),
+           sep = "_"
+           ) %>% 
+  separate(col = decay,
+           into = c("decay",
+                    "decay_value"
+                    ),
+           sep = "_"
+           )
+
+
+runtime_dopar
+
+# View(rmse_vals_df)
+rmse_vals_df %>% 
+  arrange(rmse)
+View(rmse_vals_df %>% 
+       arrange(rmse)
+     )
+
+
+rm(rmse_vals_list)
+
+```
+  
+    
+  Now, run the model using the best parameter settings.  
+    
+  Setup the model.
+```{r}
+
+# use the best parameter settings
+best_settings <-
+  rmse_vals_df %>% 
+  filter(rmse == min(rmse)
+        )
+
+saveRDS(best_settings,
+        paste0(wd,
+               "/Models/",
+               "best_settings.Rds"
+               )
+        )
+
+# best_settings <-
+#   readRDS(paste0(wd,
+#                  "/Models/",
+#                  "best_settings.Rds"
+#                  )
+#           )
+
+
+###### Build the LSTM Model
+
+# Update FLAG parameters with `best_settings` values
+FLAGS <- flags(
+  # There is a so-called "stateful LSTM" in Keras. While LSTM is stateful per se,
+  # this adds a further tweak where the hidden states get initialized with values 
+  # from the item at same position in the previous batch.
+  # This is helpful just under specific circumstances, or if you want to create an
+  # "infinite stream" of states, in which case you'd use 1 as the batch size.
+  # Below, we show how the code would have to be changed to use this, but it won't be further
+  # discussed here.
+  flag_boolean("stateful", FALSE),
+  # Should we use several layers of LSTM?
+  # Again, just included for completeness, it did not yield any superior performance on this task.
+  # This will actually stack exactly one additional layer of LSTM units.
+  flag_boolean("stack_layers", FALSE),
+  # number of samples fed to the model in one go
+  flag_integer("batch_size", 28),  # 180
+  # size of the hidden state, equals size of predictions
+  flag_integer("n_timesteps", 7),
+  # how many epochs to train for
+  flag_integer("n_epochs", 100),
+  # fraction of the units to drop for the linear transformation of the inputs
+  flag_numeric("dropout", best_settings$drpout_value), # 0.2  drpout
+  # fraction of the units to drop for the linear transformation of the recurrent state
+  flag_numeric("recurrent_dropout", best_settings$rec_drpout_value), # 0.2  rec_drpout
+  # loss function. Found to work better for this specific case than mean squared error
+  flag_string("loss", "logcosh"),  # mape
+  # optimizer = stochastic gradient descent. Seemed to work better than adam or rmsprop here
+  # (as indicated by limited testing)
+  flag_string("optimizer_type", "adam"),  # sgd
+  # size of the LSTM layer
+  flag_integer("n_units", 128),
+  # learning rate
+  flag_numeric("lr", best_settings$lrn_rate_value), # 0.003  lrn_rate
+  # learning rate decay
+  flag_numeric("decay", best_settings$decay_value), # 0.003  decay
+  # momentum, an additional parameter to the SGD optimizer
+  flag_numeric("momentum", best_settings$momtum_value), # 0.9  momntm
+  # parameter to the early stopping callback
+  flag_integer("patience", 10)
+  )
+# FLAGS$dropout             <-    as.numeric(best_settings$drpout_value)
+# FLAGS$recurrent_dropout   <-    as.numeric(best_settings$rec_drpout_value)
+# FLAGS$lr                  <-    as.numeric(best_settings$lrn_rate_value)
+# FLAGS$decay               <-    as.numeric(best_settings$decay_value)
+# FLAGS$momentum            <-    as.numeric(best_settings$momtum_value)
+
+
+# the number of predictions we'll make equals the length of the hidden state
+n_predictions <- FLAGS$n_timesteps
+# how many features = predictors we have
+n_features <- 1
+# just in case we wanted to try different optimizers, we could add here
+optimizer <- switch(FLAGS$optimizer_type,
+                    sgd = optimizer_sgd(lr = FLAGS$lr,
+                                        momentum = FLAGS$momentum
+                                        ),
+                    adam = optimizer_adam(lr = FLAGS$lr,
+                                          decay = FLAGS$decay
+                                          )
+                    )
+
+# callbacks to be passed to the fit() function
+# We just use one here: we may stop before n_epochs if the loss on the validation set
+# does not decrease (by a configurable amount, over a configurable time)
+callbacks <-
+  list(callback_early_stopping(patience = FLAGS$patience)
+       )
+
+```
+  
+    
+  Run the model.
+```{r}
+
+model <- keras_model_sequential()
+
+model %>%
+  layer_lstm(
+    units = FLAGS$n_units,
+    batch_input_shape  = c(FLAGS$batch_size, FLAGS$n_timesteps, n_features),
+    dropout = FLAGS$dropout,
+    recurrent_dropout = FLAGS$recurrent_dropout,
+    return_sequences = TRUE,
+    stateful = FLAGS$stateful
+  )
+
+if (FLAGS$stack_layers) {
+  model %>%
+    layer_lstm(
+      units = FLAGS$n_units,
+      dropout = FLAGS$dropout,
+      recurrent_dropout = FLAGS$recurrent_dropout,
+      return_sequences = TRUE,
+      stateful = FLAGS$stateful
+    )
+}
+
+model %>% time_distributed(layer_dense(units = 1))
+
+# Root Mean Squared Error (needed for accuracy stats)
+# (must be defined within the Keras loop)
+rmse_metric <-
+  custom_metric("rmse_metric",
+                function(y_true, y_pred) {
+                  K <- backend()
+                  K$sqrt(K$mean(K$square(K$relu(y_pred - y_true)
+                                         )
+                                )
+                         )
+                  }
+                )
+
+model %>%
+  compile(
+    loss = FLAGS$loss,
+    optimizer = optimizer,
+    metrics = list(mape = "mean_absolute_percentage_error",
+                   mse = "mean_squared_error",
+                   rmse_metric
+                   )
+  )
+
+if (!FLAGS$stateful) {
+  history <-
+    model %>% 
+    fit(
+      x = X_train,
+      y = y_train,
+      validation_data = list(X_valid, y_valid),
+      batch_size = FLAGS$batch_size,
+      epochs     = FLAGS$n_epochs,
+      callbacks = callbacks,
+      verbose = 0
+      )
+  } else {
+    history <-
+      for (i in 1:FLAGS$n_epochs) {
+        model %>% 
+          fit(
+            x = X_train,
+            y = y_train,
+            validation_data = list(X_valid, y_valid),
+            callbacks = callbacks,
+            batch_size = FLAGS$batch_size,
+            epochs = 1,
+            shuffle = FALSE,
+            verbose = 0
+            )
+        
+        model %>% reset_states()
+        }
+    }
+
+if (FLAGS$stateful)
+  model %>% reset_states()
+
+summary(model)
+plot(history)
+plot(history, metrics = "loss")
+plot(history, metrics = "rmse_metric")
+
+
+save_model_hdf5(object = model,
+                filepath = paste0(wd,
+                                  "/Models/",
+                                  'keras_optimal_model.h5'
+                                  )
+                )
+
+# model <-
+#   load_model_hdf5(filepath = paste0(wd,
+#                                     "/Models/",
+#                                     'keras_optimal_model.h5'
+#                                     )
+#                   )
+
+```
+  
+    
+  Calculate accuracy (MAPE and RMSE) stats.
+```{r}
+
+## Training Set
+pred_train <- model %>%
+  predict(X_train, batch_size = FLAGS$batch_size) %>%
+  .[, , 1]
+
+# Retransform values to original scale
+pred_train_norm <- (pred_train * scale_history + center_history) ^2
+
+compare_train <- df %>% filter(key == "01_training")
+
+
+# build a dataframe that has both actual and predicted values
+for (i in 1:nrow(pred_train_norm)
+     ) {
+  varname <- paste0("pred_train", i)
+  
+  compare_train <-
+    mutate(compare_train,
+           !!varname := c(rep(NA,
+                              FLAGS$n_timesteps + i - 1
+                              ),
+                          pred_train_norm[i,],
+                          rep(NA, 
+                              nrow(compare_train) - FLAGS$n_timesteps * 2 - i + 1
+                              )
+                          )
+           )
+  }
+
+coln <- colnames(compare_train)[4:ncol(compare_train)]
+cols <- coln %>% 
+  map(~ sym(.x)
+      )
+
+# MAPE
+mape_train <-
+  map_dbl(cols,
+          function(col) {
+            data = compare_train %>%
+              mutate(pct_error = el_rides - !!col / el_rides * 100
+                     )
+
+            mape = data$pct_error %>%
+              abs() %>%
+              mean(na.rm = TRUE)
+
+            return(mape)
+            }
+          ) %>%
+  mean()
+
+
+# RMSE
+rmse_train <-
+  map(cols,
+      function(col)
+        rmse(data = compare_train,
+             truth = el_rides,
+             estimate = !!col,
+             na.rm = TRUE
+             ) %>% 
+        select(.estimate)
+      ) %>% 
+  bind_rows()
+
+rmse_train <- mean(rmse_train$.estimate, na.rm = TRUE)
+
+rmse_train
+
+
+### Calculate on test data
+pred_test <- model %>% 
+  predict(X_test, batch_size = FLAGS$batch_size) %>% 
+  .[, , 1]
+
+# Retransform values to original scale
+pred_test <- (pred_test * scale_history + center_history) ^2
+# pred_test[1:10, 1:5] %>% print()
+compare_test <- df %>% filter(key == "03_testing")
+
+# build a dataframe that has both actual and predicted values
+for (i in 1:nrow(pred_test)
+     ) {
+  varname <- paste0("pred_test", i)
+  compare_test <-
+    mutate(compare_test,
+           !!varname := c(rep(NA,
+                              FLAGS$n_timesteps + i - 1
+                              ),
+                          pred_test[i,],
+                          rep(NA,
+                              nrow(compare_test) - FLAGS$n_timesteps * 2 - i + 1
+                              )
+                          )
+           )
+  }
+
+# compare_test %>% write_csv(str_replace(model_path, ".hdf5", ".test.csv"))
+# compare_test[FLAGS$n_timesteps:(FLAGS$n_timesteps + 10), c(2, 4:8)] %>% print()
+
+coln <- colnames(compare_test)[4:ncol(compare_test)]
+cols <- coln %>% 
+  map(~ sym(.x)
+      )
+
+# MAPE
+mape_test <-
+  map_dbl(cols,
+          function(col) {
+            data = compare_test %>%
+              mutate(pct_error = el_rides - !!col / el_rides * 100
+                     )
+
+            mape = data$pct_error %>%
+              abs() %>%
+              mean(na.rm = TRUE)
+
+            return(mape)
+            }
+          ) %>%
+  mean()
+
+
+# RMSE
+rmse_test <-
+  map(cols,
+      function(col)
+        rmse(data = compare_test,
+             truth = el_rides,
+             estimate = !!col,
+             na.rm = TRUE
+             ) %>% 
+        select(.estimate)
+      ) %>% 
+  bind_rows()
+
+rmse_test <- mean(rmse_test$.estimate, na.rm = TRUE)
+
+rmse_test
+
+
+message("mape_train")
+mape_train
+
+message("mape_test")
+mape_test
+
+message("rmse_train")
+rmse_train
+
+message("rmse_test")
+rmse_test
+
+
+# View(compare_train)
+# View(compare_test)
+
+```
+  
+    
+  Plot actual vs. prediction on test data.
+```{r}
+
+ggplot(compare_test,
+       aes(x = el_date, 
+           y = el_rides
+           )
+       ) +
+  geom_line() +
+  geom_line(aes(y = pred_test1), color = "cyan", na.rm = TRUE) +
+  geom_line(aes(y = pred_test30), color = "red", na.rm = TRUE) +
+  geom_line(aes(y = pred_test60), color = "green", na.rm = TRUE) +
+  geom_line(aes(y = pred_test90), color = "violet", na.rm = TRUE) +
+  geom_line(aes(y = pred_test120), color = "cyan", na.rm = TRUE) +
+  geom_line(aes(y = pred_test150), color = "red", na.rm = TRUE) +
+  geom_line(aes(y = pred_test180), color = "green", na.rm = TRUE) +
+  # geom_line(aes(y = pred_test350), color = "cyan") +
+  # geom_line(aes(y = pred_test400), color = "red") +
+  # geom_line(aes(y = pred_test450), color = "green") +  
+  # geom_line(aes(y = pred_test500), color = "cyan") +
+  # geom_line(aes(y = pred_test550), color = "violet") +
+  labs(title = "Keras LSTM Predictions on Test Set",
+       subtitle = "L Stop ID 40600:  split 13 of 13"
+       ) +
+  theme_minimal() +
+  NULL
+
+```
+  
+    
+  Run the LSTM model for each split.
+```{r}
+
+# Build the function
+obtain_predictions <-
+  function(split) {
+    ##### split into train (2/3 of original train data), validation (1/3 of original train data), and test (original validation data)
+    keras_split_pt <-
+      ((analysis(split) %>% 
+          nrow()
+        ) * (2/3)
+       ) %>% 
+      round(digits = 0)
+    
+    df_trn <-
+      analysis(split)[1:keras_split_pt,
+                       ,
+                      drop = FALSE
+                      ] %>% 
+      select(el_date, el_rides)
+    
+    df_val <-
+      analysis(split)[(keras_split_pt + 1):nrow(analysis(split)
+                                                ),
+                       ,
+                      drop = FALSE
+                      ] %>% 
+      select(el_date, el_rides)
+    
+    df_tst <- assessment(split) %>% 
+      select(el_date, el_rides)
+    
+    
+    df <-
+      bind_rows(df_trn %>% add_column(key = "01_training"),
+                df_val %>% add_column(key = "02_validation"),
+                df_tst %>% add_column(key = "03_testing")
+                ) %>% 
+      as_tbl_time(index = el_date) %>% 
+      select(el_date,
+             key,
+             el_rides
+             )
+    
+    
+    ##### Center & Scaling the data
+    rec_obj <- recipe(el_rides ~ ., df) %>% 
+      step_sqrt(el_rides) %>% 
+      step_center(el_rides) %>% 
+      step_scale(el_rides) %>% 
+      prep()
+    
+    df_processed_tbl <- bake(rec_obj, df)
+    
+    center_history <- rec_obj$steps[[2]]$means["el_rides"]
+    scale_history  <- rec_obj$steps[[3]]$sds["el_rides"]
+    
+    
+    ###### Build the LSTM Model
+    FLAGS <- FLAGS
+    
+    n_predictions <- FLAGS$n_timesteps
+    n_features <- 1
+    
+    optimizer <- switch(FLAGS$optimizer_type,
+                        sgd = optimizer_sgd(lr = FLAGS$lr,
+                                            momentum = FLAGS$momentum
+                                            ),
+                        adam = optimizer_adam(lr = FLAGS$lr,
+                                              decay = FLAGS$decay
+                                              )
+                        )
+    
+    callbacks <- list(callback_early_stopping(patience = FLAGS$patience)
+                      )
+    
+    
+    ###### extract el_ridess from data frame
+    train_vals <- df_processed_tbl %>% 
+      filter(key == "01_training") %>%
+      select(el_rides) %>% 
+      pull()
+    
+    valid_vals <- df_processed_tbl %>% 
+      filter(key == "02_validation") %>% 
+      select(el_rides) %>% 
+      pull()
+    
+    test_vals <- df_processed_tbl %>% 
+      filter(key == "03_testing") %>% 
+      select(el_rides) %>% 
+      pull()
+    
+    
+    ###### build the windowed matrices
+    # build_matrix <- function(tseries, overall_timesteps) {
+    #   t(sapply(1:(length(tseries) - overall_timesteps + 1),
+    #            function(x)
+    #              tseries[x:(x + overall_timesteps - 1)]
+    #            )
+    #     )
+    #   
+    #   }
+    
+    train_matrix <- build_matrix(train_vals, FLAGS$n_timesteps + n_predictions)
+    valid_matrix <- build_matrix(valid_vals, FLAGS$n_timesteps + n_predictions)
+    test_matrix <- build_matrix(test_vals, FLAGS$n_timesteps + n_predictions)
+    
+    
+    ###### separate matrices into training and testing parts
+    # also, discard last batch if there are fewer than batch_size samples (a purely technical requirement)
+    # nrow(X_train) %/% 360 * 360
+    # nrow(X_valid) %/% 360 * 360
+    X_train <- train_matrix[, 1:FLAGS$n_timesteps]
+    y_train <- train_matrix[, (FLAGS$n_timesteps + 1):(FLAGS$n_timesteps * 2)]
+    X_train <- X_train[1:(nrow(X_train) %/% FLAGS$batch_size * FLAGS$batch_size), ]
+    y_train <- y_train[1:(nrow(y_train) %/% FLAGS$batch_size * FLAGS$batch_size), ]
+    
+    X_valid <- valid_matrix[, 1:FLAGS$n_timesteps]
+    y_valid <- valid_matrix[, (FLAGS$n_timesteps + 1):(FLAGS$n_timesteps * 2)]
+    X_valid <- X_valid[1:(nrow(X_valid) %/% FLAGS$batch_size * FLAGS$batch_size), ]
+    y_valid <- y_valid[1:(nrow(y_valid) %/% FLAGS$batch_size * FLAGS$batch_size), ]
+    
+    X_test <- test_matrix[, 1:FLAGS$n_timesteps]
+    y_test <- test_matrix[, (FLAGS$n_timesteps + 1):(FLAGS$n_timesteps * 2)]
+    X_test <- X_test[1:(nrow(X_test) %/% FLAGS$batch_size * FLAGS$batch_size), ]
+    y_test <- y_test[1:(nrow(y_test) %/% FLAGS$batch_size * FLAGS$batch_size), ]
+    
+    # add on the required third axis
+    reshape_X_3d <- function(X) {
+      dim(X) <- c(dim(X)[1],
+                  dim(X)[2],
+                  1
+                  )
+      
+      X
+      }
+    
+    X_train <- reshape_X_3d(X_train)
+    X_valid <- reshape_X_3d(X_valid)
+    X_test <- reshape_X_3d(X_test)
+    
+    y_train <- reshape_X_3d(y_train)
+    y_valid <- reshape_X_3d(y_valid)
+    y_test <- reshape_X_3d(y_test)
+    
+    
+    ##### Run longer version
+    model <- keras_model_sequential()
+    
+    model %>%
+      layer_lstm(
+        units = FLAGS$n_units,
+        batch_input_shape  = c(FLAGS$batch_size, FLAGS$n_timesteps, n_features),
+        dropout = FLAGS$dropout,
+        recurrent_dropout = FLAGS$recurrent_dropout,
+        return_sequences = TRUE,
+        stateful = FLAGS$stateful
+      )
+    
+    if (FLAGS$stack_layers) {
+      model %>%
+        layer_lstm(
+          units = FLAGS$n_units,
+          dropout = FLAGS$dropout,
+          recurrent_dropout = FLAGS$recurrent_dropout,
+          return_sequences = TRUE,
+          stateful = FLAGS$stateful
+        )
+    }
+    
+    model %>% time_distributed(layer_dense(units = 1))
+    
+    # Root Mean Squared Error (needed for accuracy stats)
+    # (must be defined within the Keras loop)
+    rmse_metric <-
+      custom_metric("rmse_metric",
+                    function(y_true, y_pred) {
+                      K <- backend()
+                      K$sqrt(K$mean(K$square(K$relu(y_pred - y_true)
+                                             )
+                                    )
+                      )
+                      }
+                  )
+    
+    model %>% 
+      compile(
+        loss = FLAGS$loss,
+        optimizer = optimizer,
+        metrics = list(mape = "mean_absolute_percentage_error",
+                       mse = "mean_squared_error",
+                       rmse_metric
+                       )
+        )
+    
+    if (!FLAGS$stateful) {
+      history <- model %>% 
+        fit(
+          x = X_train,
+          y = y_train,
+          validation_data = list(X_valid, y_valid),
+          batch_size = FLAGS$batch_size,
+          epochs     = FLAGS$n_epochs,
+          callbacks = callbacks,
+          verbose = 0
+          )
+      } else {
+        history <-
+          for (i in 1:FLAGS$n_epochs) {
+            model %>% 
+              fit(
+                x = X_train,
+                y = y_train,
+                validation_data = list(X_valid, y_valid),
+                callbacks = callbacks,
+                batch_size = FLAGS$batch_size,
+                epochs = 1,
+                shuffle = FALSE,
+                verbose = 0
+                )
+            
+            model %>% reset_states()
+            }
+        }
+    
+    if (FLAGS$stateful)
+      model %>% reset_states()
+    
+    
+    ## Get predictions
+    pred_train <- model %>%
+      predict(X_train, batch_size = FLAGS$batch_size) %>%
+      .[, , 1]
+    
+    pred_valid <- model %>%
+      predict(X_valid, batch_size = FLAGS$batch_size) %>%
+      .[, , 1]
+    
+    pred_test <- model %>% 
+      predict(X_test, batch_size = FLAGS$batch_size) %>% 
+      .[, , 1]
+    
+    # Retransform values to original scale
+    pred_train_norm <- (pred_train * scale_history + center_history) ^2
+    pred_valid_norm <- (pred_valid * scale_history + center_history) ^2
+    pred_test_norm <- (pred_test * scale_history + center_history) ^2
+    
+    compare_train <- df %>% filter(key == "01_training")
+    compare_valid <- df %>% filter(key == "02_validation")
+    compare_test <- df %>% filter(key == "03_testing")
+    
+    ##### build a dataframe that has both actual and predicted values
+    for (i in 1:nrow(pred_train_norm)
+         ) {
+      varname <- paste0("pred_train", i)
+      
+      compare_train <-
+        mutate(compare_train,
+               !!varname := c(rep(NA,
+                                  FLAGS$n_timesteps + i - 1
+                                  ),
+                              pred_train_norm[i,],
+                              rep(NA, 
+                                  nrow(compare_train) - FLAGS$n_timesteps * 2 - i + 1
+                                  )
+                              )
+               )
+      }
+    
+    for (i in 1:nrow(pred_valid_norm)
+         ) {
+      varname <- paste0("pred_valid", i)
+      
+      compare_valid <-
+        mutate(compare_valid,
+               !!varname := c(rep(NA,
+                                  FLAGS$n_timesteps + i - 1
+                                  ),
+                              pred_valid_norm[i,],
+                              rep(NA, 
+                                  nrow(compare_valid) - FLAGS$n_timesteps * 2 - i + 1
+                                  )
+                              )
+               )
+      }
+    
+    for (i in 1:nrow(pred_test_norm)
+         ) {
+      varname <- paste0("pred_test", i)
+      compare_test <-
+        mutate(compare_test,
+               !!varname := c(rep(NA,
+                                  FLAGS$n_timesteps + i - 1
+                                  ),
+                              pred_test_norm[i,],
+                              rep(NA,
+                                  nrow(compare_test) - FLAGS$n_timesteps * 2 - i + 1
+                                  )
+                              )
+               )
+     }
+    
+    ##### final output
+    list(train = compare_train,
+         valid = compare_valid,
+         test = compare_test
+         )
+    }
+
+```
+  
+    
+  Run the function.
+```{r}
+
+# best_settings <-
+#   readRDS(paste0(wd,
+#                  "/Data_Processed/",
+#                  "best_settings.Rds"
+#                  )
+#           )
+
+# using foreach on tot_cores - 1 (i.e., 3) cores
+# user   system  elapsed 
+#  21.834   16.848 2159.961 
+# ~ 36 min
+
+# user   system  elapsed 
+# 2308.015  241.913 1852.001
+# ~ 31 min
+
+start <- proc.time()
+
+# tot_cores <- detectCores()
+# cl <- makeCluster(tot_cores - 1)
+# registerDoParallel(cl)
+# 
+# all_split_preds <-
+#   foreach(i = add_el_stop_id,
+#           .packages = c("rsample",
+#                         "tibbletime",
+#                         "recipes",
+#                         "tfruns",
+#                         "keras",
+#                         "tidyverse",
+#                         "purrr",
+#                         "yardstick"
+#                         ),
+#           .combine = c,
+#           .verbose = FALSE
+#           ) %dopar% {
+#             dat = i %>%
+#               mutate(predict = map(splits,
+#                                    obtain_predictions
+#                                    )
+#                      )
+# 
+#             return(dat)
+#             }
+
+all_split_preds <-
+  pmap(.l = list(a = add_el_stop_id),
+       .f = function(a) {
+         a %>%
+           mutate(predict = map(splits,
+                                obtain_predictions
+                                )
+                  )
+         }
+       )
+
+
+runtime_keras_all <- proc.time() - start
+runtime_keras_all
+
+# stopCluster(cl)
+# rm(cl)
+rm(start)
+
+
+saveRDS(all_split_preds,
+        paste0(wd,
+               "/Models/",
+               "all_split_preds.Rds"
+               )
+        )
+
+# all_split_preds <-
+#   readRDS(paste0(wd,
+#                  "/Models/",
+#                  "all_split_preds.Rds"
+#                  )
+#           )
+
+
+# View(all_split_preds$`40910`$predict)
+# add_el_stop_id$`40910`$splits %>% length()
+
+```
+  
+    
+  Calculate accuracy stats.
+```{r}
+
+# all_split_preds$`40600`$predict[[1]]$train
+# all_split_preds$`40600`$predict[[1]]$test
+
+
+# function itself
+accuracy_stats <-
+  function(df, stat_type) {
+    coln <- colnames(df)[4:ncol(df)]
+    cols <- coln %>% 
+      map(~ sym(.x)
+          )
+    
+    if(stat_type == "rmse") {
+      result = map(cols,
+                   function(col)
+                     rmse(data = df,
+                          truth = el_rides,
+                          estimate = !!col,
+                          na.rm = TRUE
+                          ) %>% 
+                     select(.estimate)
+                   ) %>% 
+        bind_rows()
+      
+      result = mean(result$.estimate, na.rm = TRUE)
+      } else {
+        result = map_dbl(cols,
+                         function(col) {
+                           data = df %>% 
+                             mutate(pct_error = el_rides - !!col / el_rides * 100
+                                    )
+                           
+                           mape_stat = data$pct_error %>% 
+                             abs() %>% 
+                             mean(na.rm = TRUE)
+                           
+                           return(mape_stat)
+                           }
+                         ) %>% 
+          mean()
+        }
+    
+    return(result)
+    }
+
+
+# length(all_split_preds)
+# names(all_split_preds)
+# 
+# length(all_split_preds$`ttb.gov/foia/frl.shtml`)
+# names(all_split_preds$`ttb.gov/foia/frl.shtml`)
+# length(all_split_preds$`ttb.gov/foia/frl.shtml`$splits)
+
+
+all_split_preds_unnest <-
+  all_split_preds %>% 
+  map(~ unnest(.x,
+               predict
+               )
+      )
+
+# length(all_split_preds_unnest$`40600`$predict)
+# length(all_split_preds_unnest$`40910`$predict)
+names(all_split_preds_unnest$`40600`)
+
+# all_split_preds_individ <-
+#   pmap(.l = list(a = all_split_preds_unnest),
+#        .f = function(a) {
+#          lngth_tot = length(a$predict)
+#          
+#          a[seq(1, lngth_tot - 2, by = 3), ] # training sets are every other of 39 total sets
+#          }
+#        )
+
+# all_split_preds_unnest$`40600`$id %>% length()
+# all_split_preds_train$`40600`$id %>% length()
+
+all_split_preds_individ <-
+  pmap(.l = list(a = all_split_preds_unnest),
+       .f = function(a) {
+         lngth_tot = length(a$predict)
+         
+         train_ = a[seq(1, lngth_tot - 2, by = 3), ] # train is the 1st of every 3 sets
+         valid_ = a[seq(2, lngth_tot - 1, by = 3), ] # valid is the 2nd of every 3 sets
+         test_ = a[seq(3, lngth_tot, by = 3), ] # test is the 3rd of every 3 sets
+         
+         # a$keras_predict.train = train_
+         # a$keras_perdict.valid = valid_
+         # a$keras_predict.test = test_
+         
+         # return(a)
+         return(list(train = train_,
+                     valid = valid_,
+                     test = test_
+                     )
+                )
+         }
+       )
+
+# all_split_preds_test <-
+#   pmap(.l = list(a = all_split_preds_unnest),
+#        .f = function(a) {
+#          lngth_tot = length(a$predict)
+#          
+#          a[seq(3, lngth_tot, by = 3), ] # testing sets are every other of 26 total sets
+#          }
+#        )
+
+# all_split_preds_test$`40600`$id %>% length()
+ 
+# all_split_preds_individ$`40600`$train %>% View()
+# all_split_preds_individ$`40600`$train$predict[[1]] %>%
+#     accuracy_stats(stat_type = "rmse")
+
+# 
+# View(all_split_preds_train$`40910`$predict)
+# View(all_split_preds_train$`41660`$predict)
+
+# test <-
+#   all_split_preds_individ$`40910`$train %>%  
+#   select(el_stop_id, id, start_date, predict) %>% 
+#   mutate(rmse = map_dbl(predict,
+#                         ~ accuracy_stats(df = .x,
+#                                          stat_type = "rmse"
+#                                          )
+#                         ),
+#          mape = map_dbl(predict,
+#                         ~ accuracy_stats(df = .x,
+#                                          stat_type = "mape"
+#                                          )
+#                         )
+#          ) %>%
+#   select(-predict)
+# 
+# class(test)
+# View(test)
+# colnames(test)
+# View(test %>% select(id, start_date, rmse, mape))
+
+# all_split_preds_individ$`40600`$train %>% colnames()
+# all_split_preds_individ$`40600`$valid %>% colnames()
+# all_split_preds_individ$`40600`$test %>% colnames()
+
+# user   system  elapsed 
+# 2050.926  337.664 2625.468
+# ~ 44 min
+start <- proc.time()
+all_split_rmse_mape <-
+  pmap(.l = list(a = all_split_preds_individ),
+       .f = function(a) {
+         trn = a$train
+         vld = a$valid
+         tst = a$test
+         
+         data_trn = trn %>% 
+           mutate(keras.interpolation_rmse =
+                    map_dbl(predict,
+                            ~ accuracy_stats(df = .x,
+                                             stat_type = "rmse"
+                                             )
+                            ),
+                  keras.interpolation_mape =
+                    map_dbl(predict,
+                            ~ accuracy_stats(df = .x,
+                                             stat_type = "mape"
+                                             )
+                            )
+                  ) %>% 
+           select(-predict)
+         
+         data_vld = vld %>% 
+           select(el_stop_id, id, start_date, predict) %>% 
+           mutate(keras.extrapolation_rmse =
+                    map_dbl(predict,
+                            ~ accuracy_stats(df = .x,
+                                             stat_type = "rmse"
+                                             )
+                            ),
+                  keras.extrapolation_mape =
+                    map_dbl(predict,
+                            ~ accuracy_stats(df = .x,
+                                             stat_type = "mape"
+                                             )
+                            )
+                  ) %>% 
+           select(-predict)
+         
+         data_tst = tst %>% 
+           select(el_stop_id, id, start_date, predict) %>% 
+           mutate(keras.test_rmse =
+                    map_dbl(predict,
+                            ~ accuracy_stats(df = .x,
+                                             stat_type = "rmse"
+                                             )
+                            ),
+                  keras.test_mape =
+                    map_dbl(predict,
+                            ~ accuracy_stats(df = .x,
+                                             stat_type = "mape"
+                                             )
+                            )
+                  ) %>% 
+           select(-predict)
+         
+         full_data =
+           data_trn %>% 
+           left_join(y = data_vld,
+                     by = c("el_stop_id" = "el_stop_id",
+                            "id" = "id",
+                            "start_date" = "start_date"
+                            )
+                     ) %>% 
+           left_join(y = data_tst,
+                     by = c("el_stop_id" = "el_stop_id",
+                            "id" = "id",
+                            "start_date" = "start_date"
+                            )
+                     )
+         
+         return(full_data)
+         }
+       )
+
+runtime_accuracy_stats_train <- proc.time() - start
+runtime_accuracy_stats_train
+
+
+rm(start)
+
+
+saveRDS(all_split_rmse_mape,
+        paste0(wd,
+               "/Models/",
+               "all_split_rmse_mape.Rds"
+               )
+        )
+
+# all_split_rmse_mape <-
+#   readRDS(paste0(wd,
+#                  "/Models/",
+#                  "all_split_rmse_mape.Rds"
+#                  )
+#           )
+
+
+# user  system elapsed 
+# 228.691  33.500 269.695
+# ~ 5 min
+# start <- proc.time()
+# all_split_rmse_test <-
+#   pmap(.l = list(a = all_split_preds_test),
+#        .f = function(a) {
+#          a %>% 
+#            mutate(keras.extrap.rmse =
+#                     map_dbl(predict,
+#                             ~ accuracy_stats(df = .x,
+#                                              stat_type = "rmse"
+#                                              )
+#                             ),
+#                   keras.extrap.mape =
+#                     map_dbl(predict,
+#                             ~ accuracy_stats(df = .x,
+#                                              stat_type = "mape"
+#                                              )
+#                             )
+#                   ) %>% 
+#            # select(el_stop_id, id, start_date, keras_rmse, keras_mape) %>% 
+#            select(-predict)
+#          }
+#        )
+# 
+# runtime_accuracy_stats_test <- proc.time() - start
+# runtime_accuracy_stats_test
+# rm(start)
+# 
+# saveRDS(all_split_rmse_test,
+#         paste0(wd,
+#                "/Models/",
+#                "all_split_rmse_test.Rds"
+#                )
+#         )
+
+# all_split_rmse_test <-
+#   readRDS(paste0(wd,
+#                  "/Data_Processed/",
+#                  "all_split_rmse_test.Rds"
+#                  )
+#           )
+
+
+all_split_rmse_mape %>% 
+  map(~ View(.x))
+
+```
+
+
+```{r}
+
+# all_split_rmse_train$`40600` %>% 
+#   gather(key = "model",
+#          value = "value",
+#          -id,
+#          -start_date,
+#          -el_stop_id
+#          ) %>% 
+#   group_by(el_stop_id,
+#            model
+#            ) %>% 
+#   summarise(mean = mean(value, na.rm = TRUE),
+#             median = median(value, na.rm = TRUE)
+#             ) %>% 
+#   ungroup() %>% 
+#   arrange(el_stop_id,
+#           # model,
+#           median
+#           )
+
+
+mean_med_stats <-
+  all_split_rmse_mape %>% 
+  map(~ gather(.x,
+               key = "model",
+               value = "value",
+               -id,
+               -start_date,
+               -el_stop_id
+               ) %>% 
+        filter(#!str_detect(model, "extrapolation"),
+               !str_detect(model, "mape"),
+               ) %>% 
+        group_by(el_stop_id,
+                 model
+                 ) %>% 
+        summarise(mean = mean(value, na.rm = TRUE),
+                  median = median(value, na.rm = TRUE)
+                  ) %>% 
+        ungroup() %>% 
+        # separate(col = model,
+        #          into = c("mod", "stat_type"),
+        #          sep = "\\.",
+        #          remove = FALSE
+        #          ) %>% 
+        arrange(el_stop_id,
+                median
+                ) %>% 
+        mutate(stat_type = case_when(str_detect(model, "interpolation") ~ "interpolation",
+                                     str_detect(model, "extrapolation") ~ "extrapolation",
+                                     TRUE ~ "other"
+                                     )#,
+               # sdf = str_locate_all(model, "\\.")
+               )
+      ) %>% 
+  bind_rows() %>% 
+  group_by(stat_type,
+           el_stop_id
+           ) %>% 
+  arrange(median) %>% 
+  mutate(row_num = row_number()) %>% 
+  ungroup() %>% 
+  arrange(stat_type,
+          el_stop_id,
+          # model,
+          median
+          )
+
+mean_med_stats
+View(mean_med_stats)
+
+```
+
+
+
+
+
+
+## Visualize the Accuracy Measures   
     
   Plot interpolation and extrapolation over time, by model.
 ```{r}
@@ -6138,1430 +7970,12 @@ plot_actuals_vs_models
 rm(clrs, lne_, forecast_data_to_plot_list, func_get_forecast_data)
 
 ```
- 
- 
- 
- 
- 
- 
- 
- 
 
-## Testing Using Keras for LSTM
-### Based on examples from [http://www.business-science.io/timeseries-analysis/2018/07/01/keras-lstm-sunspots-part2.html](http://www.business-science.io/timeseries-analysis/2018/07/01/keras-lstm-sunspots-part2.html) and [https://tensorflow.rstudio.com/blog/sunspots-lstm.html](https://tensorflow.rstudio.com/blog/sunspots-lstm.html)  
-  
-  Try an example on just the most recent split for one url.
-```{r}
 
-example_split <- add_el_stop_id$`40600`$splits[[13]]
-example_split_id <- add_el_stop_id$`40600`$id[[13]]
 
 
-##### split into train, validation, and test
-keras_split_pt <-
-  ((analysis(example_split) %>% 
-      nrow()
-    ) * (2/3)
-   ) %>% 
-  round(digits = 0) 
-  
-df_trn <-
-  analysis(example_split)[1:keras_split_pt,
-                           ,
-                          drop = FALSE
-                          ] %>% 
-  select(el_date, el_rides)
 
-df_val <-
-  analysis(example_split)[(keras_split_pt + 1):nrow(analysis(example_split)
-                                                    ),
-                           ,
-                          drop = FALSE
-                          ] %>% 
-  select(el_date, el_rides)
 
-df_tst <- assessment(example_split) %>% 
-  select(el_date, el_rides)
-
-
-rm(keras_split_pt)
-
-
-df <- bind_rows(
-  df_trn %>% add_column(key = "01_training"),
-  df_val %>% add_column(key = "02_validation"),
-  df_tst %>% add_column(key = "03_testing")
-  ) %>% 
-  as_tbl_time(index = el_date) %>% 
-  select(el_date,
-         key,
-         el_rides
-         )
-
-View(df)
-
-df %>% 
-  group_by(key) %>% 
-  summarize(min_date = min(el_date),
-            max_date = max(el_date),
-            rows = n()
-         ) %>% 
-  ungroup()
-
-
-# rm(list = ls(pattern = "df_"))
-rm(list = ls(pattern = "example_split"))
-
-
-##### Center & Scaling the data
-rec_obj <- recipe(el_rides ~ ., df) %>% 
-  step_sqrt(el_rides) %>% 
-  step_center(el_rides) %>% 
-  step_scale(el_rides) %>% 
-  prep()
-
-df_processed_tbl <- bake(rec_obj, df)
-
-View(df_processed_tbl)
-
-center_history <- rec_obj$steps[[2]]$means["el_rides"]
-scale_history  <- rec_obj$steps[[3]]$sds["el_rides"]
-
-c("center" = center_history, "scale" = scale_history)
-
-
-##### Shaping the data for LSTM modeling
-# These variables are being defined just because of the order in which we present things in this post (first the data, then the model). They will be superseded by FLAGS$n_timesteps, FLAGS$batch_size and n_predictions in the following snippet
-n_timesteps <- 7
-n_predictions <- n_timesteps
-batch_size <- 180
-
-# t(sapply(1:(length(train_vals) - (14 + 14) + 1),
-#          function(x)
-#            train_vals[x:(x + (14 + 14) - 1)]
-#          )
-#   )
-
-
-# functions used
-build_matrix <- function(tseries, overall_timesteps) {
-  t(sapply(1:(length(tseries) - overall_timesteps + 1),
-           function(x) 
-             tseries[x:(x + overall_timesteps - 1)]
-           )
-    )
-  }
-
-reshape_X_3d <- function(X) {
-  dim(X) <- c(dim(X)[1],
-              dim(X)[2],
-              1
-              )
-  X
-  }
-
-
-###### extract el_rides from data frame
-train_vals <- df_processed_tbl %>% 
-  filter(key == "01_training") %>%
-  select(el_rides) %>%
-  pull()
-
-valid_vals <- df_processed_tbl %>%
-  filter(key == "02_validation") %>%
-  select(el_rides) %>%
-  pull()
-
-test_vals <- df_processed_tbl %>%
-  filter(key == "03_testing") %>%
-  select(el_rides) %>%
-  pull()
-
-
-###### build the windowed matrices
-train_matrix <- build_matrix(train_vals, n_timesteps + n_predictions)
-valid_matrix <- build_matrix(valid_vals, n_timesteps + n_predictions)
-test_matrix <- build_matrix(test_vals, n_timesteps + n_predictions)
-
-###### separate matrices into training and testing parts
-# also, discard last batch if there are fewer than batch_size samples (a purely technical requirement)
-# nrow(X_train) %/% 360 * 360
-# nrow(X_valid) %/% 360 * 360
-X_train <- train_matrix[, 1:n_timesteps]
-y_train <- train_matrix[, (n_timesteps + 1):(n_timesteps * 2)]
-X_train <- X_train[1:(nrow(X_train) %/% batch_size * batch_size), ]
-y_train <- y_train[1:(nrow(y_train) %/% batch_size * batch_size), ]
-
-X_valid <- valid_matrix[, 1:n_timesteps]
-y_valid <- valid_matrix[, (n_timesteps + 1):(n_timesteps * 2)]
-X_valid <- X_valid[1:(nrow(X_valid) %/% batch_size * batch_size), ]
-y_valid <- y_valid[1:(nrow(y_valid) %/% batch_size * batch_size), ]
-
-X_test <- test_matrix[, 1:n_timesteps]
-y_test <- test_matrix[, (n_timesteps + 1):(n_timesteps * 2)]
-X_test <- X_test[1:(nrow(X_test) %/% batch_size * batch_size), ]
-y_test <- y_test[1:(nrow(y_test) %/% batch_size * batch_size), ]
-
-# add on the required third axis
-X_train <- reshape_X_3d(X_train)
-X_valid <- reshape_X_3d(X_valid)
-X_test <- reshape_X_3d(X_test)
-
-y_train <- reshape_X_3d(y_train)
-y_valid <- reshape_X_3d(y_valid)
-y_test <- reshape_X_3d(y_test)
-
-
-
-# to find the optimal parameter settings, looping through for a make-shift grid-search of parameters
-
-# original settings in sequential loop
-  # for (#lrn_rate in seq(0.00, 0.003, 0.001)
-  #      lrn_rate in seq(0.00, 0.001, 0.001)
-  #      ) {
-  #   for #(rec_drpout in seq(0.0, 0.2, 0.1)
-  #       (rec_drpout in seq(0.0, 0.1, 0.1)
-  #        ) {
-  #     for #(drpout in seq(0.0, 0.2, 0.1)
-  #         (drpout in seq(0.1, 0.1, 0.1)
-  #     ) {
-  #       for #(momntm in seq(0.7, 0.9, 0.1)
-  #           (momntm in seq(0.9, 0.9, 0.1)
-  #       ) {
-
-
-
-# devtools::install_github("rstudio/keras")
-# install_keras()  # should only have to install once
-# user   system  elapsed 
-#   16.628   22.519 4901.369
-# ~ 82 min
-start <- proc.time()
-
-tot_cores <- detectCores()
-cl <- makeCluster(tot_cores - 1)
-registerDoParallel(cl)
-
-# 4 x 3 x 3 x 3 = 108 different combinations tried
-# set the outer-most-loop with lrn_rate as it has the most number of possibilities
-
-keras_parameter_tuning_trials <-
-  foreach(lrn_rate = seq(0.00, 0.003, 0.001),
-          .packages = c("tfruns", "keras", "tidyverse", "purrr"),
-          .combine = c,
-          .verbose = TRUE
-          ) %:% 
-  foreach(rec_drpout = seq(0.0, 0.2, 0.1),
-          .packages = c("tfruns", "keras", "tidyverse", "purrr"),
-          .combine = c,
-          .verbose = TRUE
-          ) %:% 
-  foreach(drpout = seq(0.0, 0.2, 0.1),
-          packages = c("tfruns", "keras", "tidyverse", "purrr"),
-          .combine = c,
-          .verbose = TRUE
-          ) %:% 
-  foreach(momntm = seq(0.7, 0.9, 0.1),
-          packages = c("tfruns", "keras", "tidyverse", "purrr"),
-          .combine = c,
-          .verbose = TRUE
-          ) %dopar% {
-            
-###### Build the LSTM Model
-FLAGS <- flags(
-  # There is a so-called "stateful LSTM" in Keras. While LSTM is stateful per se,
-  # this adds a further tweak where the hidden states get initialized with values 
-  # from the item at same position in the previous batch.
-  # This is helpful just under specific circumstances, or if you want to create an
-  # "infinite stream" of states, in which case you'd use 1 as the batch size.
-  # Below, we show how the code would have to be changed to use this, but it won't be further
-  # discussed here.
-  flag_boolean("stateful", TRUE),
-  # Should we use several layers of LSTM?
-  # Again, just included for completeness, it did not yield any superior performance on this task.
-  # This will actually stack exactly one additional layer of LSTM units.
-  flag_boolean("stack_layers", FALSE),
-  # number of samples fed to the model in one go
-  flag_integer("batch_size", 180),
-  # size of the hidden state, equals size of predictions
-  flag_integer("n_timesteps", 7),
-  # how many epochs to train for
-  flag_integer("n_epochs", 100),
-  # fraction of the units to drop for the linear transformation of the inputs
-  flag_numeric("dropout", 0.2), # 0.2  drpout
-  # fraction of the units to drop for the linear transformation of the recurrent state
-  flag_numeric("recurrent_dropout", 0.2), # 0.2  rec_drpout
-  # loss function. Found to work better for this specific case than mean squared error
-  flag_string("loss", "mape"),
-  # optimizer = stochastic gradient descent. Seemed to work better than adam or rmsprop here
-  # (as indicated by limited testing)
-  flag_string("optimizer_type", "sgd"),
-  # size of the LSTM layer
-  flag_integer("n_units", 128),
-  # learning rate
-  flag_numeric("lr", 0.003), # 0.003  lrn_rate
-  # momentum, an additional parameter to the SGD optimizer
-  flag_numeric("momentum", 0.9), # 0.9  momntm
-  # parameter to the early stopping callback
-  flag_integer("patience", 10)
-)
-
-# the number of predictions we'll make equals the length of the hidden state
-n_predictions <- FLAGS$n_timesteps
-# how many features = predictors we have
-n_features <- 1
-# just in case we wanted to try different optimizers, we could add here
-optimizer <- switch(FLAGS$optimizer_type,
-                    sgd = optimizer_sgd(lr = FLAGS$lr,
-                                        momentum = FLAGS$momentum
-                                        )
-                    )
-
-# callbacks to be passed to the fit() function
-# We just use one here: we may stop before n_epochs if the loss on the validation set
-# does not decrease (by a configurable amount, over a configurable time)
-callbacks <-
-  list(callback_early_stopping(patience = FLAGS$patience)
-       )
-
-
-##### Run longer version
-model <- keras_model_sequential()
-
-model %>%
-  layer_lstm(
-    units = FLAGS$n_units,
-    batch_input_shape  = c(FLAGS$batch_size, FLAGS$n_timesteps, n_features),
-    dropout = FLAGS$dropout,
-    recurrent_dropout = FLAGS$recurrent_dropout,
-    return_sequences = TRUE,
-    stateful = FLAGS$stateful
-  )
-
-if (FLAGS$stack_layers) {
-  model %>%
-    layer_lstm(
-      units = FLAGS$n_units,
-      dropout = FLAGS$dropout,
-      recurrent_dropout = FLAGS$recurrent_dropout,
-      return_sequences = TRUE,
-      stateful = FLAGS$stateful
-    )
-}
-
-model %>% time_distributed(layer_dense(units = 1))
-
-model %>%
-  compile(
-    loss = FLAGS$loss,
-    optimizer = optimizer,
-    metrics = list("mean_absolute_percentage_error")
-  )
-
-if (!FLAGS$stateful) {
-  history <- model %>% 
-    fit(
-      x = X_train,
-      y = y_train,
-      validation_data = list(X_valid, y_valid),
-      batch_size = FLAGS$batch_size,
-      epochs     = FLAGS$n_epochs,
-      callbacks = callbacks
-      )
-  } else {
-    for (i in 1:FLAGS$n_epochs) {
-      history <- model %>% 
-        fit(
-          x = X_train,
-          y = y_train,
-          validation_data = list(X_valid, y_valid),
-          callbacks = callbacks,
-          batch_size = FLAGS$batch_size,
-          epochs = 1,
-          shuffle = FALSE
-          )
-      
-      model %>% reset_states()
-      }
-    }
-
-if (FLAGS$stateful)
-  model %>% reset_states()
-
-# plot(history)
-# plot(history_s)
-# plot(history, metrics = "loss")
-
-
-# model
-# model_s
-
-
-#### Calculate MAPE
-## Training Set
-pred_train <- model %>%
-  predict(X_train, batch_size = FLAGS$batch_size) %>%
-  .[, , 1]
-
-# Retransform values to original scale
-pred_train_norm <- (pred_train * scale_history + center_history) ^2
-
-compare_train <- df %>% filter(key == "01_training")
-
-
-# build a dataframe that has both actual and predicted values
-for (i in 1:nrow(pred_train_norm)
-     ) {
-  varname <- paste0("pred_train", i)
-  
-  compare_train <-
-    mutate(compare_train,
-           !!varname := c(rep(NA,
-                              FLAGS$n_timesteps + i - 1
-                              ),
-                          pred_train_norm[i,],
-                          rep(NA, 
-                              nrow(compare_train) - FLAGS$n_timesteps * 2 - i + 1
-                              )
-                          )
-           )
-  }
-
-coln <- colnames(compare_train)[4:ncol(compare_train)]
-cols <- map(coln, quo(sym(.)
-                      )
-            )
-
-mape_train <-
-  map_dbl(cols,
-          function(col) {
-            data = compare_train %>% 
-              mutate(pct_error = el_rides - !!col / el_rides * 100
-                     )
-            
-            mape = data$pct_error %>% 
-              abs() %>% 
-              mean(na.rm = TRUE)
-            
-            return(mape)
-            }
-          ) %>% 
-  mean()
-
-# mape_train
-
-name <- paste0("learningrate_",
-               lrn_rate,
-               "___",
-               "dropout_",
-               drpout,
-               "___",
-               "recurrentdropout_",
-               rec_drpout,
-               "___",
-               "momentum_",
-               momntm
-               )
-
-# tri_list <- list()
-# tri_list[[name]] <- list(model_train = model,
-#                          mape_train = mape_train,
-#                          compare_train = compare_train
-#                          )
-#     
-#     return(tri_list)
-
-mape_train_list <- list()
-mape_train_list[[name]] <- mape_train
-
-return(mape_train_list)
-    }
-
-
-stopCluster(cl)
-rm(cl)
-
-runtime_dopar <- proc.time() - start
-rm(start)
-
-# saving is done to avoid having to run the models again
-saveRDS(keras_parameter_tuning_trials,
-        paste0(wd,
-               "/Data_Processed/",
-               "keras_parameter_tuning_trials.Rds"
-               )
-        )
-
-saveRDS(runtime_dopar,
-        paste0(wd,
-               "/Data_Processed/",
-               "runtime_dopar.Rds"
-               )
-        )
-
-
-# keras_parameter_tuning_trials <-
-#   readRDS(paste0(wd,
-#                  "/Data_Processed/",
-#                  "keras_parameter_tuning_trials.Rds"
-#                  )
-#           )
-# 
-# runtime_dopar <-
-#   readRDS(paste0(wd,
-#                  "/Data_Processed/",
-#                  "runtime_dopar.Rds"
-#                  )
-#           )
-
-
-mape_vals_list <-
-  pmap(.l = list(a = keras_parameter_tuning_trials,
-                 b = names(keras_parameter_tuning_trials)
-                 ),
-       .f = function(a, b) {
-         mape_val = a
-         
-         df = data.frame(parameters = b,
-                         mape = mape_val
-                         )
-         
-         return(df)
-         }
-       )
-
-mape_vals_df <-
-  bind_rows(mape_vals_list) %>% 
-  separate(col = parameters,
-           into = c("learn_rate",
-                    "dropout",
-                    "recurrent_dropout",
-                    "momentum"
-                    ),
-           sep = "___",
-           remove = FALSE
-           ) %>% 
-  separate(col = learn_rate,
-           into = c("lrn_rate",
-                    "lrn_rate_value"
-                    ),
-           sep = "_"
-           ) %>% 
-  separate(col = dropout,
-           into = c("drpout",
-                    "drpout_value"
-                    ),
-           sep = "_"
-           ) %>% 
-  separate(col = recurrent_dropout,
-           into = c("rec_drpout",
-                    "rec_drpout_value"
-                    ),
-           sep = "_"
-           ) %>% 
-  separate(col = momentum,
-           into = c("momtum",
-                    "momtum_value"
-                    ),
-           sep = "_"
-           )
-
-
-runtime_dopar
-View(mape_vals_df)
-View(mape_vals_df %>% 
-       arrange(mape)
-     )
-
-
-rm(mape_vals_list)
-
-
-###################################################################
-###################################################################
-###################################################################
-###################################################################
-###################################################################
-
-# use the best parameter settings
-best_settings <-
-  mape_vals_df %>% 
-  filter(mape == min(mape)
-        )
-
-saveRDS(best_settings,
-        paste0(wd,
-               "/Data_Processed/",
-               "best_settings.Rds"
-               )
-        )
-
-# best_settings <-
-#   readRDS(paste0(wd,
-#                  "/Data_Processed/",
-#                  "best_settings.Rds"
-#                  )
-#           )
-
-
-###### Build the LSTM Model
-FLAGS <- flags(
-  # There is a so-called "stateful LSTM" in Keras. While LSTM is stateful per se,
-  # this adds a further tweak where the hidden states get initialized with values 
-  # from the item at same position in the previous batch.
-  # This is helpful just under specific circumstances, or if you want to create an
-  # "infinite stream" of states, in which case you'd use 1 as the batch size.
-  # Below, we show how the code would have to be changed to use this, but it won't be further
-  # discussed here.
-  flag_boolean("stateful", TRUE),
-  # Should we use several layers of LSTM?
-  # Again, just included for completeness, it did not yield any superior performance on this task.
-  # This will actually stack exactly one additional layer of LSTM units.
-  flag_boolean("stack_layers", FALSE),
-  # number of samples fed to the model in one go
-  flag_integer("batch_size", 360),
-  # size of the hidden state, equals size of predictions
-  flag_integer("n_timesteps", 14),
-  # how many epochs to train for
-  flag_integer("n_epochs", 100),
-  # fraction of the units to drop for the linear transformation of the inputs
-  flag_numeric("dropout", best_settings$drpout_value), # 0.1
-  # fraction of the units to drop for the linear transformation of the recurrent state
-  flag_numeric("recurrent_dropout", best_settings$rec_drpout_value), # 0.0
-  # loss function. Found to work better for this specific case than mean squared error
-  flag_string("loss", "mape"),
-  # optimizer = stochastic gradient descent. Seemed to work better than adam or rmsprop here
-  # (as indicated by limited testing)
-  flag_string("optimizer_type", "sgd"),
-  # size of the LSTM layer
-  flag_integer("n_units", 128),
-  # learning rate
-  flag_numeric("lr", best_settings$lrn_rate_value), # 0.003
-  # momentum, an additional parameter to the SGD optimizer
-  flag_numeric("momentum", best_settings$momtum_value), # 0.8
-  # parameter to the early stopping callback
-  flag_integer("patience", 10)
-)
-
-# the number of predictions we'll make equals the length of the hidden state
-n_predictions <- FLAGS$n_timesteps
-# how many features = predictors we have
-n_features <- 1
-# just in case we wanted to try different optimizers, we could add here
-optimizer <- switch(FLAGS$optimizer_type,
-                    sgd = optimizer_sgd(lr = FLAGS$lr,
-                                        momentum = FLAGS$momentum
-                                        )
-                    )
-
-# callbacks to be passed to the fit() function
-# We just use one here: we may stop before n_epochs if the loss on the validation set
-# does not decrease (by a configurable amount, over a configurable time)
-callbacks <-
-  list(callback_early_stopping(patience = FLAGS$patience)
-       )
-
-
-##### Run longer version
-model <- keras_model_sequential()
-
-model %>%
-  layer_lstm(
-    units = FLAGS$n_units,
-    batch_input_shape  = c(FLAGS$batch_size, FLAGS$n_timesteps, n_features),
-    dropout = FLAGS$dropout,
-    recurrent_dropout = FLAGS$recurrent_dropout,
-    return_sequences = TRUE,
-    stateful = FLAGS$stateful
-  )
-
-if (FLAGS$stack_layers) {
-  model %>%
-    layer_lstm(
-      units = FLAGS$n_units,
-      dropout = FLAGS$dropout,
-      recurrent_dropout = FLAGS$recurrent_dropout,
-      return_sequences = TRUE,
-      stateful = FLAGS$stateful
-    )
-}
-
-model %>% time_distributed(layer_dense(units = 1))
-
-model %>%
-  compile(
-    loss = FLAGS$loss,
-    optimizer = optimizer,
-    metrics = list("mean_absolute_percentage_error")
-  )
-
-if (!FLAGS$stateful) {
-  history <- model %>% 
-    fit(
-      x = X_train,
-      y = y_train,
-      validation_data = list(X_valid, y_valid),
-      batch_size = FLAGS$batch_size,
-      epochs     = FLAGS$n_epochs,
-      callbacks = callbacks
-      )
-  } else {
-    for (i in 1:FLAGS$n_epochs) {
-      history <- model %>% 
-        fit(
-          x = X_train,
-          y = y_train,
-          validation_data = list(X_valid, y_valid),
-          callbacks = callbacks,
-          batch_size = FLAGS$batch_size,
-          epochs = 1,
-          shuffle = FALSE
-          )
-      
-      model %>% reset_states()
-      }
-    }
-
-if (FLAGS$stateful)
-  model %>% reset_states()
-
-# plot(history)
-# plot(history, metrics = "loss")
-
-# model
-
-
-#### Calculate MAPE on train data
-## Training Set
-pred_train <- model %>%
-  predict(X_train, batch_size = FLAGS$batch_size) %>%
-  .[, , 1]
-
-# Retransform values to original scale
-pred_train_norm <- (pred_train * scale_history + center_history) ^2
-
-compare_train <- df %>% filter(key == "01_training")
-
-
-# build a dataframe that has both actual and predicted values
-for (i in 1:nrow(pred_train_norm)
-     ) {
-  varname <- paste0("pred_train", i)
-  
-  compare_train <-
-    mutate(compare_train,
-           !!varname := c(rep(NA,
-                              FLAGS$n_timesteps + i - 1
-                              ),
-                          pred_train_norm[i,],
-                          rep(NA, 
-                              nrow(compare_train) - FLAGS$n_timesteps * 2 - i + 1
-                              )
-                          )
-           )
-  }
-
-coln <- colnames(compare_train)[4:ncol(compare_train)]
-cols <- map(coln, 
-            quo(rlang::sym(.)
-                )
-            )
-# cols <- coln %>% 
-#   map(~ quo(rlang::sym(.x)
-#             )
-#       )
-
-mape_train <-
-  map_dbl(#cols,
-          coln,
-          function(col) {
-            data = compare_train %>% 
-              mutate(pct_error = el_rides - !!col / el_rides * 100
-                     )
-            
-            mape = data$pct_error %>% 
-              abs() %>% 
-              mean(na.rm = TRUE)
-            
-            return(mape)
-            }
-          ) %>% 
-  mean()
-
-mape_train
-View(compare_train)
-
-
-library("yardstick")
-rmse_train <-
-  map_dbl(#cols,
-          coln,
-          function(col)
-            rmse(compare_train,
-                 truth = el_rides,
-                 estimate = !!col,
-                 na.rm = TRUE
-                 )
-          ) %>% 
-  mean()
-
-rmse_train
-# rmse(compare_train,
-#      truth = el_rides,
-#      estimate = pred_train1,
-#      na.rm = TRUE
-#      )
-
-### Calculate MAPE on test data
-pred_test <- model %>% 
-  predict(X_test, batch_size = FLAGS$batch_size) %>% 
-  .[, , 1]
-
-# Retransform values to original scale
-pred_test <- (pred_test * scale_history + center_history) ^2
-pred_test[1:10, 1:5] %>% print()
-compare_test <- df %>% filter(key == "03_testing")
-
-# build a dataframe that has both actual and predicted values
-for (i in 1:nrow(pred_test)
-     ) {
-  varname <- paste0("pred_test", i)
-  compare_test <-
-    mutate(compare_test,
-           !!varname := c(rep(NA,
-                              FLAGS$n_timesteps + i - 1
-                              ),
-                          pred_test[i,],
-                          rep(NA,
-                              nrow(compare_test) - FLAGS$n_timesteps * 2 - i + 1
-                              )
-                          )
-           )
-  }
-
-compare_test %>% write_csv(str_replace(model_path, ".hdf5", ".test.csv"))
-compare_test[FLAGS$n_timesteps:(FLAGS$n_timesteps + 10), c(2, 4:8)] %>% print()
-
-coln <- colnames(compare_test)[4:ncol(compare_test)]
-cols <- map(coln, 
-            quo(rlang::sym(.)
-                )
-            )
-
-mape_test <-
-  map_dbl(cols,
-          function(col) {
-            data = compare_test %>% 
-              mutate(pct_error = el_rides - !!col / el_rides * 100
-                     )
-            
-            mape = data$pct_error %>% 
-              abs() %>% 
-              mean(na.rm = TRUE)
-            
-            return(mape)
-            }
-          ) %>% 
-  mean()
-
-mape_test
-View(compare_test)
-
-
-rsme_test <-
-  map_dbl(#cols,
-          coln,
-          function(col)
-            rmse(compare_test,
-                 truth = el_rides,
-                 estimate = !!col,
-                 na.rm = TRUE
-                 )
-          ) %>% 
-  mean()
-
-rsme_test
-
-
-ggplot(compare_test, aes(x = el_date, y = el_rides)) + geom_line() +
-  geom_line(aes(y = pred_test1), color = "cyan") +
-  geom_line(aes(y = pred_test50), color = "red") +
-  geom_line(aes(y = pred_test100), color = "green") +
-  geom_line(aes(y = pred_test150), color = "violet") +
-  # geom_line(aes(y = pred_test200), color = "cyan") +
-  # geom_line(aes(y = pred_test250), color = "red") +
-  # geom_line(aes(y = pred_test300), color = "green") +
-  # geom_line(aes(y = pred_test350), color = "cyan") +
-  # geom_line(aes(y = pred_test400), color = "red") +
-  # geom_line(aes(y = pred_test450), color = "green") +  
-  # geom_line(aes(y = pred_test500), color = "cyan") +
-  # geom_line(aes(y = pred_test550), color = "violet") +
-  ggtitle("Predictions on test set")
-
-
-###################################################################
-###################################################################
-
-
-```
-  
-    
-  Run the LSTM model for each split.
-```{r}
-
-# Build the function
-obtain_predictions <-
-  function(split) {
-    ##### split into train, validation, and test
-    df_trn <- analysis(split) %>% 
-      select(date, pageview_sum)
-    df_val <- assessment(split) %>% 
-      select(date, pageview_sum)
-    df_tst <- add_lags$`ttb.gov/foia/frl.shtml` %>% 
-      filter(train_test == "test") %>% 
-      select(date, pageview_sum)
-    
-    df <- bind_rows(df_trn %>% add_column(key = "01_training"),
-                    df_val %>% add_column(key = "02_validation"),
-                    df_tst %>% add_column(key = "03_testing")
-                    ) %>% 
-      as_tbl_time(index = date) %>% 
-      select(date,
-             key,
-             pageview_sum
-             )
-    
-    rm(list = ls(pattern = "df_"))
-    
-    
-    ##### Center & Scaling the data
-    rec_obj <- recipe(pageview_sum ~ ., df) %>% 
-      step_sqrt(pageview_sum) %>% 
-      step_center(pageview_sum) %>% 
-      step_scale(pageview_sum) %>% 
-      prep()
-    
-    df_processed_tbl <- bake(rec_obj, df)
-    
-    center_history <- rec_obj$steps[[2]]$means["pageview_sum"]
-    scale_history  <- rec_obj$steps[[3]]$sds["pageview_sum"]
-    
-    ###### Build the LSTM Model
-    FLAGS <-
-      flags(flag_boolean("stateful", TRUE),
-            flag_boolean("stack_layers", FALSE),
-            flag_integer("batch_size", 360),
-            flag_integer("n_timesteps", 14),
-            flag_integer("n_epochs", 100),
-            flag_numeric("dropout", best_settings$drpout_value), # 0.2
-            flag_numeric("recurrent_dropout", best_settings$rec_drpout_value), # 0.2
-            flag_string("loss", "mape"),
-            flag_string("optimizer_type", "sgd"),
-            flag_integer("n_units", 128),
-            flag_numeric("lr", best_settings$lrn_rate_value), # 0.003
-            flag_numeric("momentum", best_settings$momtum_value), # 0.9
-            flag_integer("patience", 10)
-            )
-    
-    n_predictions <- FLAGS$n_timesteps
-    n_features <- 1
-    
-    optimizer <- switch(FLAGS$optimizer_type,
-                        sgd = optimizer_sgd(lr = FLAGS$lr,
-                                            momentum = FLAGS$momentum
-                                            )
-                        )
-    
-    callbacks <- list(callback_early_stopping(patience = FLAGS$patience)
-                      )
-    
-    
-    ###### extract pageview_sums from data frame
-    train_vals <- df_processed_tbl %>% 
-      filter(key == "01_training") %>%
-      select(pageview_sum) %>% 
-      pull()
-    
-    valid_vals <- df_processed_tbl %>% 
-      filter(key == "02_validation") %>% 
-      select(pageview_sum) %>% 
-      pull()
-    
-    test_vals <- df_processed_tbl %>% 
-      filter(key == "03_testing") %>% 
-      select(pageview_sum) %>% 
-      pull()
-    
-    
-    ###### build the windowed matrices
-    build_matrix <- function(tseries, overall_timesteps) {
-      t(sapply(1:(length(tseries) - overall_timesteps + 1),
-               function(x)
-                 tseries[x:(x + overall_timesteps - 1)]
-               )
-        )
-      
-      }
-    
-    train_matrix <- build_matrix(train_vals, FLAGS$n_timesteps + n_predictions)
-    valid_matrix <- build_matrix(valid_vals, FLAGS$n_timesteps + n_predictions)
-    test_matrix <- build_matrix(test_vals, FLAGS$n_timesteps + n_predictions)
-    
-    ###### separate matrices into training and testing parts
-    # also, discard last batch if there are fewer than batch_size samples (a purely technical requirement)
-    # nrow(X_train) %/% 360 * 360
-    # nrow(X_valid) %/% 360 * 360
-    X_train <- train_matrix[, 1:FLAGS$n_timesteps]
-    y_train <- train_matrix[, (FLAGS$n_timesteps + 1):(FLAGS$n_timesteps * 2)]
-    X_train <- X_train[1:(nrow(X_train) %/% FLAGS$batch_size * FLAGS$batch_size), ]
-    y_train <- y_train[1:(nrow(y_train) %/% FLAGS$batch_size * FLAGS$batch_size), ]
-    
-    X_valid <- valid_matrix[, 1:FLAGS$n_timesteps]
-    y_valid <- valid_matrix[, (FLAGS$n_timesteps + 1):(FLAGS$n_timesteps * 2)]
-    X_valid <- X_valid[1:(nrow(X_valid) %/% FLAGS$batch_size * FLAGS$batch_size), ]
-    y_valid <- y_valid[1:(nrow(y_valid) %/% FLAGS$batch_size * FLAGS$batch_size), ]
-    
-    X_test <- test_matrix[, 1:FLAGS$n_timesteps]
-    y_test <- test_matrix[, (FLAGS$n_timesteps + 1):(FLAGS$n_timesteps * 2)]
-    X_test <- X_test[1:(nrow(X_test) %/% FLAGS$batch_size * FLAGS$batch_size), ]
-    y_test <- y_test[1:(nrow(y_test) %/% FLAGS$batch_size * FLAGS$batch_size), ]
-    
-    # add on the required third axis
-    reshape_X_3d <- function(X) {
-      dim(X) <- c(dim(X)[1],
-                  dim(X)[2],
-                  1
-                  )
-      
-      X
-      }
-    
-    X_train <- reshape_X_3d(X_train)
-    X_valid <- reshape_X_3d(X_valid)
-    X_test <- reshape_X_3d(X_test)
-    
-    y_train <- reshape_X_3d(y_train)
-    y_valid <- reshape_X_3d(y_valid)
-    y_test <- reshape_X_3d(y_test)
-    
-    
-    ##### Run longer version
-    model <- keras_model_sequential()
-    
-    model %>%
-      layer_lstm(
-        units = FLAGS$n_units,
-        batch_input_shape  = c(FLAGS$batch_size, FLAGS$n_timesteps, n_features),
-        dropout = FLAGS$dropout,
-        recurrent_dropout = FLAGS$recurrent_dropout,
-        return_sequences = TRUE,
-        stateful = FLAGS$stateful
-      )
-    
-    if (FLAGS$stack_layers) {
-      model %>%
-        layer_lstm(
-          units = FLAGS$n_units,
-          dropout = FLAGS$dropout,
-          recurrent_dropout = FLAGS$recurrent_dropout,
-          return_sequences = TRUE,
-          stateful = FLAGS$stateful
-        )
-    }
-    
-    model %>% time_distributed(layer_dense(units = 1))
-    
-    model %>%
-      compile(
-        loss = FLAGS$loss,
-        optimizer = optimizer,
-        metrics = list("mean_absolute_percentage_error")
-      )
-    
-    if (!FLAGS$stateful) {
-      history <- model %>% 
-        fit(
-          x = X_train,
-          y = y_train,
-          validation_data = list(X_valid, y_valid),
-          batch_size = FLAGS$batch_size,
-          epochs     = FLAGS$n_epochs,
-          callbacks = callbacks
-          )
-      } else {
-        for (i in 1:FLAGS$n_epochs) {
-          history <- model %>% 
-            fit(
-              x = X_train,
-              y = y_train,
-              validation_data = list(X_valid, y_valid),
-              callbacks = callbacks,
-              batch_size = FLAGS$batch_size,
-              epochs = 1,
-              shuffle = FALSE
-              )
-          
-          model %>% reset_states()
-          }
-        }
-    
-    if (FLAGS$stateful)
-      model %>% reset_states()
-    
-    
-    ## Get predictions
-    pred_train <- model %>%
-      predict(X_train, batch_size = FLAGS$batch_size) %>%
-      .[, , 1]
-    
-    pred_test <- model %>% 
-      predict(X_test, batch_size = FLAGS$batch_size) %>% 
-      .[, , 1]
-    
-    # Retransform values to original scale
-    pred_train_norm <- (pred_train * scale_history + center_history) ^2
-    pred_test <- (pred_test * scale_history + center_history) ^2
-    
-    compare_train <- df %>% filter(key == "01_training")
-    compare_test <- df %>% filter(key == "03_testing")
-    
-    # build a dataframe that has both actual and predicted values
-    for (i in 1:nrow(pred_train_norm)
-         ) {
-      varname <- paste0("pred_train", i)
-      
-      compare_train <-
-        mutate(compare_train,
-               !!varname := c(rep(NA,
-                                  FLAGS$n_timesteps + i - 1
-                                  ),
-                              pred_train_norm[i,],
-                              rep(NA, 
-                                  nrow(compare_train) - FLAGS$n_timesteps * 2 - i + 1
-                                  )
-                              )
-               )
-      
-      }
-    
-    for (i in 1:nrow(pred_test)
-         ) {
-      varname <- paste0("pred_test", i)
-      compare_test <-
-        mutate(compare_test,
-               !!varname := c(rep(NA,
-                                  FLAGS$n_timesteps + i - 1
-                                  ),
-                              pred_test[i,],
-                              rep(NA,
-                                  nrow(compare_test) - FLAGS$n_timesteps * 2 - i + 1
-                                  )
-                              )
-               )
-     }
-    
-    # final output
-    list(train = compare_train,
-         test = compare_test
-         )
-    }
-
-```
-  
-    
-  Run the function.
-```{r}
-
-# best_settings <-
-#   readRDS(paste0(wd,
-#                  "/Data_Processed/",
-#                  "best_settings.Rds"
-#                  )
-#           )
-
-# using foreach on tot_cores - 1 (i.e., 3) cores
-# user   system  elapsed 
-#  21.834   16.848 2159.961 
-# ~ 36 min
-
-# user   system  elapsed 
-# 5314.170  886.959 3610.817 
-# ~ 60 min
-
-start <- proc.time()
-
-# tot_cores <- detectCores()
-# cl <- makeCluster(tot_cores - 1)
-# registerDoParallel(cl)
-# 
-# all_split_preds <-
-#   foreach(i = roll_rs,
-#           .packages = c("rsample",
-#                         "tibbletime",
-#                         "recipes",
-#                         "tfruns",
-#                         "keras",
-#                         "tidyverse",
-#                         "purrr"
-#                         ),
-#           .combine = c,
-#           .verbose = TRUE
-#           ) %dopar% {
-#             dat = i %>% 
-#               mutate(predict = map(splits,
-#                                    obtain_predictions
-#                                    )
-#                      )
-# 
-#             return(dat)
-#             }
-
-all_split_preds <-
-  pmap(.l = list(a = roll_rs),
-       .f = function(a) {
-         a %>%
-           mutate(predict = map(splits,
-                                obtain_predictions
-                                )
-                  )
-         }
-       )
-
-
-# stopCluster(cl)
-# rm(cl)
-
-
-runtime_keras_all <- proc.time() - start
-runtime_keras_all
-rm(start)
-
-
-saveRDS(all_split_preds,
-        paste0(wd,
-               "/Data_Processed/",
-               "all_split_preds.Rds"
-               )
-        )
-
-# all_split_preds <-
-#   readRDS(paste0(wd,
-#                  "/Data_Processed/",
-#                  "all_split_preds.Rds"
-#                  )
-#           )
-
-```
-  
-    
-  Calculate accuracy stats.
-```{r}
-
-# all_split_preds$`ttb.gov/foia/frl.shtml`$predict[[1]]$train
-# all_split_preds$`ttb.gov/foia/frl.shtml`$predict[[1]]$test
-
-library("yardstick")
-# function itself
-accuracy_stats <-
-  function(df, stat_type) {
-    coln <- colnames(df)[4:ncol(df)]
-    cols <- map(coln, quo(sym(.)
-                          )
-                )
-    
-    rmse = map_dbl(cols,
-                   function(col)
-                     rmse(df,
-                          truth = pageview_sum,
-                          estimate = !!col,
-                          na.rm = TRUE
-                          )
-                   ) %>% 
-      mean()
-    
-    mape = map_dbl(cols,
-                   function(col) {
-                     data = df %>% 
-                       mutate(pct_error = pageview_sum - !!col / pageview_sum * 100
-                              )
-                     
-                     mape_stat = data$pct_error %>% 
-                       abs() %>% 
-                       mean(na.rm = TRUE)
-                     
-                     return(mape_stat)
-                     }
-                   ) %>% 
-      mean()
-    
-    accuracy_stats = list(rmse = rmse,
-                          mape = mape
-                          )
-    
-    if(stat_type == "rmse") {
-      result = accuracy_stats$rmse
-      } else {
-        result = accuracy_stats$mape
-        }
-    
-    return(result)
-    }
-
-
-# length(all_split_preds)
-# names(all_split_preds)
-# 
-# length(all_split_preds$`ttb.gov/foia/frl.shtml`)
-# names(all_split_preds$`ttb.gov/foia/frl.shtml`)
-# length(all_split_preds$`ttb.gov/foia/frl.shtml`$splits)
-
-
-all_split_preds2 <-
-  all_split_preds %>% 
-  map(~ unnest(.x,
-               predict
-               )
-      )
-# length(all_split_preds2$`ttb.gov/foia/frl.shtml`$predict[[1]])
-length(all_split_preds2$`ttb.gov/foia/frl.shtml`$predict)
-
-all_split_preds_train <-
-  pmap(.l = list(a = all_split_preds2),
-       .f = function(a) {
-         a[seq(1, 27, by = 2), ] # training sets are every other of 28 total sets
-         }
-       )
-
-# all_split_preds2$`ttb.gov/foia/frl.shtml`$id %>% length()
-# all_split_preds_train$`ttb.gov/foia/frl.shtml`$id %>% length()
-
-
-all_split_preds_test <-
-  pmap(.l = list(a = all_split_preds2),
-       .f = function(a) {
-         a[seq(2, 28, by = 2), ] # testing sets are every other of 28 total sets
-         }
-       )
-
-# all_split_preds_test$`ttb.gov/foia/frl.shtml`$id %>% length()
-# 
-# all_split_preds_train$`ttb.gov/foia/frl.shtml`$predict[[1]] %>% 
-#     accuracy_stats(stat_type = "rmse")
-
-
-# all_split_preds_train$`ttb.gov/foia/frl.shtml` %>% 
-#   mutate(rmse = map_dbl(predict,
-#                         ~ accuracy_stats(df = .x,
-#                                        stat_type = "rmse"
-#                                        )
-#                         ),
-#          mape = map_dbl(predict,
-#                         ~ accuracy_stats(df = .x,
-#                                        stat_type = "mape"
-#                                        )
-#                         )
-#          )
-
-
-
-# user   system  elapsed 
-# 4241.814   11.744 4274.215
-# ~ 71 min
-start <- proc.time()
-all_split_rmses_train <-
-  pmap(.l = list(a = all_split_preds_train),
-       .f = function(a) {
-         a %>% 
-           mutate(rmse = map_dbl(predict,
-                                 ~ accuracy_stats(df = .x,
-                                                  stat_type = "rmse"
-                                                  )
-                                 ),
-                  mape = map_dbl(predict,
-                                 ~ accuracy_stats(df = .x,
-                                                  stat_type = "mape"
-                                                  )
-                                 )
-                  ) %>% 
-           select(id, rmse, mape)
-         }
-       )
-
-runtime_accuracy_stats_train <- proc.time() - start
-runtime_accuracy_stats_train
-rm(start)
-
-saveRDS(all_split_rmses_train,
-        paste0(wd,
-               "/Data_Processed/",
-               "all_split_rmses_train.Rds"
-               )
-        )
-
-# all_split_rmses_train <-
-#   readRDS(paste0(wd,
-#                  "/Data_Processed/",
-#                  "all_split_rmses_train.Rds"
-#                  )
-#           )
-
-
-# user   system  elapsed 
-# 1031.631    4.362 1040.847  
-# ~ 17 min
-start <- proc.time()
-all_split_rmses_test <-
-  pmap(.l = list(a = all_split_preds_test),
-       .f = function(a) {
-         a %>% 
-           mutate(rmse = map_dbl(predict,
-                                 ~ accuracy_stats(df = .x,
-                                                  stat_type = "rmse"
-                                                  )
-                                 ),
-                  mape = map_dbl(predict,
-                                 ~ accuracy_stats(df = .x,
-                                                  stat_type = "mape"
-                                                  )
-                                 )
-                  ) %>% 
-           select(id, rmse, mape)
-         }
-       )
-
-runtime_accuracy_stats_test <- proc.time() - start
-runtime_accuracy_stats_test
-rm(start)
-
-saveRDS(all_split_rmses_test,
-        paste0(wd,
-               "/Data_Processed/",
-               "all_split_rmses_test.Rds"
-               )
-        )
-
-# all_split_rmses_test <-
-#   readRDS(paste0(wd,
-#                  "/Data_Processed/",
-#                  "all_split_rmses_test.Rds"
-#                  )
-#           )
-
-
-
-all_split_rmses_train
-all_split_rmses_test
-
-```
-
-
-
- 
- 
- 
- 
- 
- 
 
 ```{r}
 
