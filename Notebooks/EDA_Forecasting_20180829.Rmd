@@ -1,6 +1,8 @@
 ---
 title: "EDA & Forecasting"
-output: html_notebook
+output:
+  html_document:
+    df_print: paged
 ---
   
 ## Setup    
@@ -28,42 +30,30 @@ library("tibbletime")
 
 # modeling
 library("fpp2")
-# library("forecast")
 library("prophet")
 library("caret")
 library("randomForest")
 library("xgboost")
 library("h2o")
-# library("glmnet")
-# library("neuralnet")
-# library("nnet")
-# library("gam")
-# library("RANN")               # kNN (used in caret NA imputation)
 library("keras")
 # use_session_with_seed(123456789) # setting the seed to obtain reproducible results
 # see https://keras.rstudio.com/articles/faq.html#how-can-i-obtain-reproducible-results-using-keras-during-development and https://cran.r-project.org/web/packages/keras/vignettes/faq.html
 # can also re-enable gpu and parallel processing by using:  use_session_with_seed(42, disable_gpu = FALSE, disable_parallel_cpu = FALSE)
-library("yardstick")            # easily calculate accuracy stats
+
 
 
 # other
 library("geosphere")          # specific for distance calculations from lat-lon pairs
 library("naniar")             # inspecting missing data
-
+library("rlang")              # building functions
 library("recipes")            # used in Keras modeling to design matrices
+library("rsample")            # rolling samples for validation stats
 library("tfruns")             # used in Keras modeling for trainin runs
 library("stringr")            # string manipulation
 library("ggplot2")            # viz
-library("rsample")            # rolling samples for validation stats
 library("sweep")              # more easily pull out model statistics
+library("yardstick")          # easily calculate accuracy stats
 library("doParallel")         # parallel processing
-library("rlang")              # building functions
-# library("tis")                # get holiday data
-# 
-# 
-# library("tidytext")           # text manipulation
-# library("topicmodels")        # topic modeling
-# library("ldatuning")          # estimating the proper number of topics
 
 ```
   
@@ -156,7 +146,10 @@ rm(rds_file_names, rds_file_paths, index_not_weather)
     
 ### "Crow Flies" Distance  
   
-  First, I just get get the necessary data sets. **Note 1:** As data for Divvy stations regularly includes multiple latitude and longitude values for the same station, I will simply take the average of these values. **Note 2:** As data for Divvy stations regularly include multiple values for when a station began (`online_date`), I will simply take the oldest of these values. **Note 3:** The first Divvy station and trip occurred in June 2013, so to have complete data, I will begin analyses from July 2013 onward.
+  First, I just get get the necessary data sets.
+  **Note 1:** As data for Divvy stations regularly includes multiple latitude and longitude values for the same station, I will simply take the average of these values.
+  **Note 2:** As data for Divvy stations regularly include multiple values for when a station began (`online_date`), I will simply take the oldest of these values.
+  **Note 3:** The first Divvy station and trip occurred in June 2013, so to have complete data, I will begin analyses from July 2013 onward.
 ```{r}
 
 el_stations_latlon <-
@@ -541,11 +534,6 @@ pmap_merge <-
                                             ),
                                      allow.cartesian = TRUE
                                      ]
-         # [ ,
-         #                               .(min_dist_miles = min(dist_miles)
-         #                                 ),
-         #                               keyby = c("el_stop_id", "el_date")
-         #                               ]
          
          min_dt =
            full_dt %>% 
@@ -950,12 +938,6 @@ rm(el_stns_full_dates_within_pt5, the_merge)
 ### Add in the general daily data (not by specific Divvy station) - i.e., the Divvy rides data for each day
 ```{r}
 
-# View(clean_vars[el_stop_id == 40090])
-# 
-# str(divvy_trips_by_day)
-# View(divvy_trips_by_day)
-
-
 ## initial merge
 base_merge <-
   merge(x = clean_vars,
@@ -1055,13 +1037,6 @@ rm(new_vars)
   First merge daily data and data on the closest divvy stations.
 ```{r}
 
-# str(el_stns_full_dates_miles_to_closest_divvy)
-# View(el_stns_full_dates_miles_to_closest_divvy[el_stop_id == 40090])
-# 
-# str(divvy_trips_by_day_from)
-# View(divvy_trips_by_day_from[from_station_id == 242])
-
-
 merge_in_closest_divvy_stn <-
   merge(x = add_daily_data,
         y = el_stns_full_dates_miles_to_closest_divvy,
@@ -1084,8 +1059,6 @@ rm(add_daily_data)
     
   Next merge in the data on Divvy stats by day and by Divvy station.
 ```{r}
-
-# str(divvy_trips_by_day_from)
 
 el_stns_full_dates_daily_stats_all <-
   merge(x = merge_in_closest_divvy_stn,
@@ -2437,94 +2410,6 @@ func_train_test_indicator <-
     return(new_data)
   }
 
-
-# test <-
-#   func_train_test_indicator(data = bind_rows(six_stations_all_lags, .id = "id"),
-#                             date_var = el_date,
-#                             train_val_pct = 0.8,
-#                             train_pct = 0.7,
-#                             new_col_suffix = "all"
-#                             )
-# 
-# colnames(bind_rows(six_stations_all_lags, .id = "id")
-#          ) %>% tail(5)
-# colnames(test) %>% tail(6)
-# str(test)
-# test %>% 
-#   group_by(data_use_all) %>% 
-#   summarise(min_el_date = min(el_date),
-#             max_el_date = max(el_date)
-#             )
-
-# test_group <-
-#   remove_first_28na_rows %>% 
-#   map(~ func_train_test_indicator(data = .x,
-#                                   date_var = el_date,
-#                                   train_val_pct = 0.8,
-#                                   train_pct = 0.7,
-#                                   new_col_suffix = "el_stop_id"
-#                                   )
-#       ) 
-# %>% 
-#   bind_rows()
-
-# str(test_group$`41140`)
-
-# View(test_group$`41140` %>% 
-#        select(el_date, el_stop_id, data_use_all, data_use_el_stop_id) #%>% 
-#        # head(5000)
-#      )
-
-# View(
-#   test_group %>% 
-#   group_by(el_stop_id, data_use_all) %>% 
-#   summarise(ed_min_a = min(el_date),
-#             ed_max_a = max(el_date)
-#             ) %>% 
-#     left_join(y = test_group %>% 
-#                 group_by(el_stop_id, data_use_el_stop_id) %>% 
-#                 summarise(ed_min_s = min(el_date),
-#                           ed_max_s = max(el_date)
-#                           ),
-#               by = c("el_stop_id" = "el_stop_id",
-#                      "data_use_all" = "data_use_el_stop_id"
-#                      )
-#               ) %>% 
-#     mutate(match_min = if_else(ed_min_a == ed_min_s, TRUE, FALSE),
-#            match_max = if_else(ed_max_a == ed_max_s, TRUE, FALSE)
-#            ) %>% 
-#     filter(match_min == FALSE | match_max == FALSE)
-# )
-
-
-# View(test_group %>% 
-#        select(el_stop_id, el_date, el_rides, data_use_all, data_use_el_stop_id) %>%
-#        filter(el_stop_id %in% c(41690, 41700)
-#               )
-#      )
-
-
-# View(
-# test_group %>% 
-#   count(el_stop_id, data_use_all) %>% 
-#   rename(n_a = n) %>% 
-#   left_join(y = test_group %>% 
-#               count(el_stop_id, data_use_el_stop_id) %>% 
-#               rename(n_es = n),
-#             by = c("el_stop_id" = "el_stop_id", 
-#                    "data_use_all" = "data_use_el_stop_id"
-#                    )
-#             ) %>% 
-#   mutate(match = if_else(n_a == n_es, TRUE, FALSE)) %>% 
-#   filter(match == FALSE)
-# )
-# 
-# test_group %>% 
-#   count(data_use_all)
-# 
-# test_group %>% 
-#   count(data_use_el_stop_id)
-
 ```
   
     
@@ -2572,7 +2457,7 @@ rm(remove_first_28na_rows, func_train_test_indicator)
 
 
 
-  **To Delete (below)**
+  **To Delete (below) when no longer needed**
   
 ```{r}
 
@@ -2588,39 +2473,7 @@ rm(remove_first_28na_rows, func_train_test_indicator)
 
 ```
 
-  **To Delete (above)**
-
-
-
-```{r}
-
-
-# # test_df_41140 <-
-#   add_trn_val_test$`41140` %>% 
-#   # filter(el_stop_id == 41140) %>% 
-#   select(#-id,
-#          -holiday_comment,
-#          -holiday_comment_l7,
-#          # -data_use_all,
-#          -day
-#          ) %>% 
-#   mutate(data_use_el_stop_id = factor(data_use_el_stop_id)
-#          ) %>% 
-#   select(-holiday) %>% 
-#   mutate_if(is.factor, factor) %>% 
-#   summary()
-# 
-# # test_df_41140$el_rides %>% auto.arima()
-# 
-# pmap(.l = list(a = remove_first_28na_rows),
-#      .f = function(a) {
-#        dat = a$el_rides
-#        
-#        aa = auto.arima(dat)
-#        }
-#      )
-
-```
+  **To Delete (above) when no longer needed**
 
 
 #### Handling Factor Variables  
@@ -2906,18 +2759,13 @@ rm(DV_corr_list)
   Modeling parameters used in multiple models.
 ```{r}
 
-# period_train <- (365 * 2) + 30 # 2 years + 28 days of data needed for LSTM Keras modeling
-# period_test <- (365 * 1) + 30 # test on 1 year * 28 days of data (even though we just predict 14 days out) needed for LSTM Keras modeling
-# skip_span <- 7 * 2 # gives 14 evenly distributed  splits
-
-
 period_train <- round((365 * 1.5),
                       digits = 0
-                      ) + 30 # 2 years + 28 days of data needed for LSTM Keras modeling
+                      ) + 30 # 1.5 years + 30 days of data needed for LSTM Keras modeling
 
 period_test <- round((365 * 0.5),
                      digits = 0
-                     ) + 30 # test on 1 year * 28 days of data (even though we just predict 14 days out) needed for LSTM Keras modeling
+                     ) + 30 # test on 0.5 years * 30 days of data (even though we just predict 14 days out) needed for LSTM Keras modeling
 
 skip_span <- 8 # gives 13 evenly distributed  splits
 
@@ -2936,26 +2784,16 @@ registerDoParallel(cl)
 
 start <- proc.time()
 DV_Fit.Rf.corr_yes <-
-  # DV_train_data[1:2] %>%
   DV_corr_predict %>%
   map(.f = function(a) {
     fitControl =
       trainControl(method = "timeslice",
-                   # initialWindow = ceiling(nrow(a) * (1/3)
-                   #                         ),
                    initialWindow = period_train,
-                   # horizon = 7,
                    horizon = period_test,
                    fixedWindow = TRUE,
                    skip = skip_span,
-                   # skip = 85,
                    summaryFunction = func_custom_accuracy_metrics
-                   # preProcOptions = list(cutoff = 0.7)
                    )
-
-    # grid_rf =
-    #   expand.grid(mtry = seq(100, 500, 100)
-    #               )
 
     set.seed(123456789)
 
@@ -2977,8 +2815,6 @@ DV_Fit.Rf.corr_yes <-
             maximize = FALSE,
             importance = TRUE,
             trControl = fitControl,
-            # ntree = 1000,
-            # tuneGrid = grid_rf,
             verbose = TRUE
             )
 
@@ -2994,26 +2830,16 @@ DV_Fit.Rf.corr_yes
 
 start <- proc.time()
 DV_Fit.Rf.corr_no <-
-  # DV_train_data %>%
   DV_nzv_predict %>%
   map(.f = function(a) {
     fitControl =
       trainControl(method = "timeslice",
-                   # initialWindow = ceiling(nrow(a) * (1/3)
-                   #                         ),
                    initialWindow = period_train,
-                   # horizon = 7,
                    horizon = period_test,
                    fixedWindow = TRUE,
                    skip = skip_span,
-                   # skip = 85,
                    summaryFunction = func_custom_accuracy_metrics
-                   # preProcOptions = list(cutoff = 0.7)
                    )
-    
-    # grid_rf =
-    #   expand.grid(mtry = seq(100, 500, 100)
-    #               )
     
     set.seed(123456789)
     
@@ -3035,8 +2861,6 @@ DV_Fit.Rf.corr_no <-
             maximize = FALSE,
             importance = TRUE,
             trControl = fitControl,
-            # ntree = 1000,
-            # tuneGrid = grid_rf,
             verbose = TRUE
             )
     
@@ -3182,26 +3006,16 @@ registerDoParallel(cl)
 
 start <- proc.time()
 DV_Fit.Xgbtree.corr_yes <-
-  # DV_train_data[1:2] %>%
   DV_corr_predict %>%
   map(.f = function(a) {
     fitControl =
       trainControl(method = "timeslice",
-                   # initialWindow = ceiling(nrow(a) * (1/3)
-                   #                         ),
                    initialWindow = period_train,
-                   # horizon = 7,
                    horizon = period_test,
                    fixedWindow = TRUE,
                    skip = skip_span,
-                   # skip = 85,
                    summaryFunction = func_custom_accuracy_metrics
-                   # preProcOptions = list(cutoff = 0.7)
                    )
-
-    # grid_rf =
-    #   expand.grid(mtry = seq(100, 500, 100)
-    #               )
 
     set.seed(123456789)
 
@@ -3223,8 +3037,6 @@ DV_Fit.Xgbtree.corr_yes <-
             maximize = FALSE,
             importance = TRUE,
             trControl = fitControl,
-            # ntree = 1000,
-            # tuneGrid = grid_rf,
             verbose = TRUE
             )
 
@@ -3241,26 +3053,16 @@ time.Xgbtree.corr_yes <- proc.time() - start
 
 start <- proc.time()
 DV_Fit.Xgbtree.corr_no <-
-  # DV_train_data %>%
   DV_nzv_predict %>%
   map(.f = function(a) {
     fitControl =
       trainControl(method = "timeslice",
-                   # initialWindow = ceiling(nrow(a) * (1/3)
-                   #                         ),
                    initialWindow = period_train,
-                   # horizon = 7,
                    horizon = period_test,
                    fixedWindow = TRUE,
                    skip = skip_span,
-                   # skip = 85,
                    summaryFunction = func_custom_accuracy_metrics
-                   # preProcOptions = list(cutoff = 0.7)
                    )
-    
-    # grid_rf =
-    #   expand.grid(mtry = seq(100, 500, 100)
-    #               )
     
     set.seed(123456789)
     
@@ -3282,8 +3084,6 @@ DV_Fit.Xgbtree.corr_no <-
             maximize = FALSE,
             importance = TRUE,
             trControl = fitControl,
-            # ntree = 1000,
-            # tuneGrid = grid_rf,
             verbose = TRUE
             )
     
@@ -3450,6 +3250,7 @@ names(roll_rs$`40600`)
 roll_rs %>% 
   map(~ length(.x$splits)
       )
+
 # roll_rs$`40600`$splits[[1]]
 # train_data %>% 
 #   map(~ summarise(.x,
@@ -3507,42 +3308,19 @@ rm(get_date)
 
 fit_model_arima <-
   function(x, ...) {
-    # suggested by Matt Dancho:
     data = x %>% 
-      # base = x %>% 
       analysis() %>% 
       # Since the first day changes over resamples, adjust it based on the first date value in the data frame
       tk_ts(select = el_rides,
             start = .$el_date[[1]] %>% lubridate::year(),
-            # freq = 365.25,
-            # freq = 365,
             freq = 7,
             silent = TRUE
             )
     
     fit = auto.arima(data, ...)
     
-    # fourier_trans = fourier(base, K = 7)
-    # 
-    # res = auto.arima(base,
-    #                  xreg = fourier_trans
-    #                  )
     return(fit)
     }
-
-
-# View(holiday_dates)
-# View(analysis(roll_rs$`ttb.gov/foia/frl.shtml`$splits[[1]]) %>% 
-#        left_join(holiday_dates,
-#                  by = c("date" = "ds")
-#                  ) %>% 
-#        mutate(holiday_binary = if_else(!is.na(holiday),
-#                                        1,
-#                                        0
-#                                        )
-#               )
-#      )
-# arima with fourier transformation and holidays in xreg
 
 ```
   
@@ -3552,11 +3330,8 @@ fit_model_arima <-
 
 fit_model_arima_xreg <-
   function(x, ...) {
-    # suggested by Matt Dancho:
     data = 
-      x %>%
-      # models$`40600`$splits[[1]] %>% 
-      # base = x %>% 
+      x %>% 
       analysis() %>% 
       mutate(holiday_binary = if_else(holiday == FALSE,
                                       0,
@@ -3589,8 +3364,6 @@ fit_model_arima_xreg <-
         ) {
       n = nrow(assessment(x)
                )
-      # n = nrow(assessment(models$`40600`$splits[[1]])
-      #          )
       
       ts_365_fourier = fourier(ts_365,
                                K = K
@@ -3617,21 +3390,8 @@ fit_model_arima_xreg <-
                                     data$el_rides_ma07,
                                     data$el_rides_ma14,
                                     data$el_rides_ma21,
-                                    data$el_rides_ma28#,
-                                    # data$divvy_pt5mi_stn_cnt,
-                                    # data$divvy_mindist_miles,
-                                    # data$tmin_bands,
-                                    # data$tmax_bands
-                                    
-                                    # data$pageview_sum_lag21,
-                                    # data$pageview_sum_lag28,
-                                    # data$bounces_sum_lag21,
-                                    # data$bounces_sum_lag28,
-                                    # data$timeOnPage_sum21,
-                                    # data$timeOnPage_sum28,
-                                    # data$avgTimeOnPage_avg_lag21,
-                                    # data$avgTimeOnPage_avg_lag28
-                                    ),
+                                    data$el_rides_ma28
+                                    )#,
                        # seasonal = FALSE
                        )
       
@@ -3660,15 +3420,8 @@ fit_model_arima_xreg <-
 # prophet
 fit_model_prophet <-
   function(x, ...) {
-    # suggested by Matt Dancho:
     x %>% 
       analysis() %>% 
-      # Since the first day changes over resamples, adjust it based on the first date value in the data frame
-      # tk_ts(select = pageview_sum,
-      #       start = .$date[[1]] %>% lubridate::year(),
-      #       freq = 365.25,
-      #       silent = TRUE
-      #       ) %>% 
       select(el_date,
              el_rides
              ) %>% 
@@ -3851,20 +3604,6 @@ saveRDS(models,
 #                  )
 #           )
 
-
-# names(models)
-# names(models$`ttb.gov/foia/frl.shtml`)
-# names(models$`ttb.gov/foia/frl.shtml`$arima_xreg[[10]])
-# nrow(models$`ttb.gov/foia/frl.shtml`$arima_xreg[[10]]$best_ts_365_fourier_future)
-# models$`ttb.gov/foia/frl.shtml`$arima_xreg[[10]]$best_fit
-# 
-# str(models$`ttb.gov/foia/frl.shtml`$splits[[3]])
-
-
-
-# rm(roll_rs)
-# rm(time.arima, time.arima_xreg, time.prophet, time.prophet_hol)
-
 ```
   
     
@@ -3896,8 +3635,6 @@ prophet.future <-
 
 length(prophet.future$`40600`$prophet.future)
 length(prophet.future$`40600`$prophet_hol.future)
-# prophet.future$`40600`$prophet.future[[10]]
-# prophet.future$`40600`$prophet_hol.future[[10]]
 
 ```  
   
@@ -3924,7 +3661,7 @@ prophet.forecast <-
                           ),
                 .f = function(b, c) {
                   predict(b, c) %>% 
-                    # if_else is needed to prevent negative predictions
+                    # if_else is needed to prevent any negative predictions
                     mutate(yhat_zero_floor = if_else(yhat < 0,
                                                      0,
                                                      yhat
@@ -3967,7 +3704,7 @@ prophet.forecast <-
                           ),
                 .f = function(b, c) {
                   predict(b, c) %>% 
-                    # if_else is needed to prevent negative predictions
+                    # if_else is needed to prevent any negative predictions
                     mutate(yhat_zero_floor = if_else(yhat < 0,
                                                      0,
                                                      yhat
@@ -4118,14 +3855,6 @@ pmap(.l = list(a = prophet.plots
        }
      )
 
-# prophet.plots$`40600`$prophet.plots[[10]]
-# prophet.plots$`40600`$prophet_hol.plots[[10]]
-# prophet.plots$`40600`$prophet[[10]]
-# prophet.plots$`40600`$prophet_hol[[10]]
-
-
-# rm(models, prophet.future, prophet.forecast, time.prophet.forecast, time.prophet_hol.forecast, start)
-
 ```
 
 
@@ -4134,7 +3863,16 @@ pmap(.l = list(a = prophet.plots
 
 ### All Variables  
   
-  First, create one-hot variables from the `add_trn_val_test` dataset.
+  Fire up h2o, but turn off the progress bar.
+```{r}
+
+h2o.init()
+h2o.no_progress()
+
+```
+  
+    
+  Now, create one-hot variables from the `add_trn_val_test` dataset, then separate the data into train, validation, and test datasets.
 ```{r}
 
 # One-Hot
@@ -4169,11 +3907,17 @@ h2o_test_tbl <-
       )
 
 
-# Fire up h2o
-h2o.init()
+# Convert to H2OFrame objects
+h2o_train <- h2o_train_tbl %>% map(~ as.h2o(.x))
+h2o_valid <- h2o_valid_tbl %>% map(~ as.h2o(.x))
+h2o_test  <- h2o_test_tbl %>% map(~ as.h2o(.x))
 
+```
+  
+    
+  Create the Interpolation & Extrapolation Datasets
+```{r}
 
-# Create the Interpolation & Extrapolation Datasets
 h2o_data <-
   pmap(.l = list(a = prophet.plots),
        .f = function(a) {
@@ -4199,12 +3943,11 @@ h2o_data <-
 # h2o_data$`40600`$interp_data[[1]] %>% as.data.frame() %>% dim()
 rm(prophet.plots)
 
-
-# Convert to H2OFrame objects
-h2o_train <- h2o_train_tbl %>% map(~ as.h2o(.x))
-h2o_valid <- h2o_valid_tbl %>% map(~ as.h2o(.x))
-h2o_test  <- h2o_test_tbl %>% map(~ as.h2o(.x))
-
+```
+  
+    
+  Set the names for h2o, and run the `h2o.automl`.
+```{r}
 
 # Set names for h2o
 y <- "el_rides"
@@ -4234,7 +3977,6 @@ h2o_automl_models <-
            validation_frame = c,
            leaderboard_frame = d,
            nfolds = 13,
-           # max_runtime_secs = 300,
            max_runtime_secs = 30,
            stopping_metric = "deviance"
            )
@@ -4263,8 +4005,12 @@ saveRDS(h2o.time,
 
 # print(automl_models_h2o$`40600`@leaderboard)
 
+```
+  
+    
+  Extract leader model.
+```{r}
 
-# Extract leader model
 h2o_automl_leader <-
   pmap(.l = list(a = h2o_automl_models),
        .f = function(a) {
@@ -4290,8 +4036,13 @@ saveRDS(h2o_automl_leader,
 #                  )
 #           )
 
+```
+  
+    
+  Get the predictions.
+```{r}
 
-# get predictions on test set
+# predictions on test set
 h2o_pred <-
   pmap(.l = list(a = h2o_automl_leader,
                  b = h2o_test
@@ -4304,7 +4055,7 @@ h2o_pred <-
        )
 
 
-# get predictions on interp & extrap
+# predictions on interp & extrap
 h2o_forecasts <-
   pmap(.l = list(a = h2o_data,
                  b = h2o_automl_leader
@@ -4390,11 +4141,17 @@ h2o_forecasts <-
          }
        )
 
+
 # add_el_stop_id$`40600`$h2o.extrap.forecast[[1]] %>% str()
 rm(h2o_data)
 
+```
+  
+    
+  Now I can calculate the accuracy (RMSE) stats.
+```{r}
 
-# accuracy
+# calculation of RMSE
 h2o_accuracy_stats <-
   pmap(.l = list(a = h2o_forecasts),
        .f = function(a) {
@@ -4447,9 +4204,12 @@ h2o_accuracy_stats %>%
   map(~ summary(.x$h2o.extrapolation)
       )
 
+```
+  
+    
+  Now I measure performance on the test dataset.
+```{r}
 
-
-# measure performance on test dataset
 h2o_perf <-
   pmap(.l = list(a = h2o_automl_leader,
                  b = h2o_test),
@@ -4485,11 +4245,11 @@ saveRDS(h2o_perf,
 ```
 
 
-### Limited Variables
-
+### Limited Variables  
+  
+  Select specific columns to use
 ```{r}
 
-# select specific columns to use
 col_names <-
   DV_corr_predict %>% 
   map(~ colnames(.x))
@@ -4509,8 +4269,12 @@ select_cols <-
 
 rm(col_names)
 
+```
+  
+    
+  Create train-val-test datasets for h2o.
+```{r}
 
-# create train-val-test for h2o
 h2o.limvars_train_tbl <-
   select_cols %>% 
   map(~ (filter(.x,
@@ -4539,17 +4303,17 @@ h2o.limvars_test_tbl <-
 rm(select_cols)
 
 
-# Fire up h2o
-# h2o.init()
-
-
 # Convert to H2OFrame objects
 h2o.limvars_train <- h2o.limvars_train_tbl %>% map(~ as.h2o(.x))
 h2o.limvars_valid <- h2o.limvars_valid_tbl %>% map(~ as.h2o(.x))
 h2o.limvars_test  <- h2o.limvars_test_tbl %>% map(~ as.h2o(.x))
 
+```
+  
+    
+  Set names for h2o and run `h2o.automl`.
+```{r}
 
-# Set names for h2o
 y <- "el_rides"
 x <- h2o.limvars_train %>% 
   map(~ setdiff(names(.x),
@@ -4597,10 +4361,21 @@ saveRDS(h2o.limvars.time,
                )
         )
 
+# h2o.limvars.time <-
+#   readRDS(paste0(wd,
+#                  "/Models/",
+#                  "h2o.limvars.time.Rds"
+#                  )
+#           )
+
 # print(h2o.limvars_automl_models$`40600`@leaderboard)
 
+```
+  
+    
+  Extract leader model.
+```{r}
 
-# Extract leader model
 h2o.limvars_automl_leader <-
   pmap(.l = list(a = h2o.limvars_automl_models),
        .f = function(a) {
@@ -4626,21 +4401,13 @@ saveRDS(h2o.limvars_automl_leader,
 #                  )
 #           )
 
+```
+  
+    
+  Get the predictions on the interpolation, and extrapolation, and test data.
+```{r}
 
-# get predictions on test set
-h2o.limvars_pred <-
-  pmap(.l = list(a = h2o.limvars_automl_leader,
-                 b = h2o.limvars_test
-                 ),
-       .f = function(a, b) {
-         res = h2o.predict(a, newdata = b)
-         
-         return(res)
-         }
-       )
-
-
-# get predictions on interp & extrap
+# predictions on interp & extrap
 h2o.limvars_forecasts <-
   pmap(.l = list(a = h2o_accuracy_stats,
                  b = h2o.limvars_automl_leader
@@ -4730,6 +4497,25 @@ h2o.limvars_forecasts <-
 rm(h2o_accuracy_stats)
 
 
+# predictions on test set
+h2o.limvars_pred <-
+  pmap(.l = list(a = h2o.limvars_automl_leader,
+                 b = h2o.limvars_test
+                 ),
+       .f = function(a, b) {
+         res = h2o.predict(a, newdata = b)
+         
+         return(res)
+         }
+       )
+
+```
+  
+    
+  Calculate the accuracy (RMSE) stats.
+```{r}
+
+# calculate RMSE
 h2o.limvars_accuracy_stats <-
   pmap(.l = list(a = h2o.limvars_forecasts),
        .f = function(a) {
@@ -4782,9 +4568,12 @@ h2o.limvars_accuracy_stats %>%
   map(~ summary(.x$h2o.limvars.extrapolation)
       )
 
+```
+  
+    
+  Measure performance on test dataset.
+```{r}
 
-
-# measure performance on test dataset
 h2o.limvars_perf <-
   pmap(.l = list(a = h2o.limvars_automl_leader,
                  b = h2o.limvars_test),
@@ -4893,14 +4682,10 @@ get_interp_prophet <- function(split, pf) {
                 mutate_at(vars(ds), as.Date),
               by = c("el_date" = "ds")
             ) %>% 
-    # mutate(pct_error = (el_rides - yhat_zero_floor) / el_rides * 100
-    #        ) %>% 
     mutate(sqrd_error = (el_rides - yhat_zero_floor)^2
            ) %>% 
     arrange(el_date)
-  
-  # mean(abs(pred_dat$pct_error)
-  #      )
+
   sqrt(mean(pred_dat$sqrd_error,
             na.rm = TRUE
             )
@@ -4971,37 +4756,6 @@ rm(accuracy_interp_arima)
 
 ### Forecast & Interpolation - Random Forest Model  
   
-  First, add the info of the Random Forest and the Xgboost model to the "base" list file.
-```{r}
-
-# test <-
-#   accuracy_interp_prophet
-# 
-# x <- DV_Fit.Rf.corr_yes$`ttb.gov/foia/frl.shtml`
-# as.tibble(x)
-# 
-# names(test$`ttb.gov/foia/frl.shtml`)
-# test$`ttb.gov/foia/frl.shtml`$rf <- as.list(x)
-# test$`ttb.gov/foia/frl.shtml`$rf[[1]] <- x
-# 
-# test_2 <-
-#   pmap(.l = list(a = test,
-#                  b = DV_Fit.Rf.corr_yes,
-#                  c = DV_Fit.Xgbtree.corr_yes
-#                  ),
-#        .f = function(a, b, c) {
-#          a$rf = b
-#          a$xgb = c
-#          
-#          return(a)
-#          }
-#        )
-# 
-# names(test_2)
-
-```
-  
-    
   Get the forecasted data for the random forest and the xgboost tree.  
     
   First, I create a function to get the error percentages.
@@ -5023,7 +4777,6 @@ get_pct_error <-
                                        0,
                                        yhat
                                        ),
-             # pct_error = (y - yhat_zero_floor) / y * 100,
              sqrd_error = (y - yhat_zero_floor)^2
              ) %>%
       arrange(el_date)
@@ -5216,8 +4969,6 @@ rf_xgb_forecasts_individualized <-
 
 
 names(rf_xgb_forecasts_individualized$`40600`)
-# rf_xgb_forecasts_individualized$`40600`$rf.forecast_interp[[13]]
-# rf_xgb_forecasts_individualized$`40600`$xgb.forecast_extrap[[13]]
 
 
 rm(accuracy_interp_prophet, rf_xgb_forecasts_combined)
@@ -5232,8 +4983,6 @@ rm(accuracy_interp_prophet, rf_xgb_forecasts_combined)
 get_interp_ML <- function(ML.fcast) {
   pred_dat = ML.fcast
   
-  # mean(abs(pred_dat$pct_error)
-  #      )
   sqrt(mean(pred_dat$sqrd_error,
             na.rm = TRUE
             )
@@ -5275,7 +5024,6 @@ accuracy_interp_ML <-
 
 
 names(accuracy_interp_ML$`40600`)
-# accuracy_interp_ML$`40600`$rf_forecast[[13]]
 accuracy_interp_ML$`40600`$rf.interpolation
 accuracy_interp_ML$`40600`$rf.extrapolation
 
@@ -5357,8 +5105,6 @@ get_pred_arima <- function(split, mod) {
 get_extrap_arima <- function(arima.fcast) {
   pred_dat = arima.fcast
   
-  # mean(abs(pred_dat$pct_error)
-  #      )
   sqrt(mean(pred_dat$sqrd_error,
             na.rm = TRUE
             )
@@ -5402,7 +5148,6 @@ accuracy_extrap_arima <-
        )
 
 names(accuracy_extrap_arima$`40600`)
-# accuracy_extrap_arima$`40600`$arima.forecast[[13]]
 accuracy_extrap_arima$`40600`$arima.extrapolation
 
 accuracy_extrap_arima %>% 
@@ -5452,20 +5197,7 @@ get_pred_arima_xreg <-
                                                     data_og$el_rides_ma07,
                                                     data_og$el_rides_ma14,
                                                     data_og$el_rides_ma21,
-                                                    data_og$el_rides_ma28#,
-                                                    # data_og$divvy_pt5mi_stn_cnt,
-                                                    # data_og$divvy_mindist_miles,
-                                                    # data_og$tmin_bands,
-                                                    # data_og$tmax_bands
-                                                    
-                                                    # data_og$pageview_sum_lag21,
-                                                    # data_og$pageview_sum_lag28,
-                                                    # data_og$bounces_sum_lag21,
-                                                    # data_og$bounces_sum_lag28,
-                                                    # data_og$timeOnPage_sum21,
-                                                    # data_og$timeOnPage_sum28,
-                                                    # data_og$avgTimeOnPage_avg_lag21,
-                                                    # data_og$avgTimeOnPage_avg_lag28
+                                                    data_og$el_rides_ma28
                                     ),
                                        h = n
                                        )$mean
@@ -5489,9 +5221,7 @@ get_pred_arima_xreg <-
 get_extrap_arima_xreg <-
   function(arima.fcast) {
     pred_dat = arima.fcast
-    
-    # mean(abs(pred_dat$pct_error)
-    #      )
+
     sqrt(mean(pred_dat$sqrd_error,
               na.rm = TRUE
               )
@@ -5535,7 +5265,6 @@ accuracy_extrap_arima_xreg <-
        )
 
 names(accuracy_extrap_arima_xreg$`40600`)
-# accuracy_extrap_arima_xreg$`40600`$arima_xreg.forecast[[13]]
 accuracy_extrap_arima_xreg$`40600`$arima_xreg.extrapolation
 
 accuracy_extrap_arima_xreg %>% 
@@ -5569,13 +5298,10 @@ get_extrap_prophet <- function(split, pf) {
                 mutate_at(vars(ds), as.Date),
               by = c("el_date" = "ds")
             ) %>% 
-    mutate(#pct_error = (el_rides - yhat_zero_floor) / el_rides * 100,
-           sqrd_error = (el_rides - yhat_zero_floor)^2 
+    mutate(sqrd_error = (el_rides - yhat_zero_floor)^2 
            ) %>% 
     arrange(el_date)
-  
-  # mean(abs(pred_dat$pct_error)
-  #      )
+
   sqrt(mean(pred_dat$sqrd_error,
             na.rm = TRUE
             )
@@ -5587,24 +5313,6 @@ get_extrap_prophet <- function(split, pf) {
     
   Run the extrapolation stats function.
 ```{r}
-
-# accuracy_extrap_arima_xreg$`ttb.gov/foia/frl.shtml`$splits[[1]] %>% 
-#   assessment() %>% 
-#   select(date,
-#          pageview_sum
-#          ) %>% 
-#   left_join(select(accuracy_extrap_arima_xreg$`ttb.gov/foia/frl.shtml`$prophet.forecast[[1]],
-#                    ds,
-#                    yhat,
-#                    yhat_zero_floor
-#                    ) %>% 
-#               mutate_at(vars(ds), as.Date),
-#               by = c("date" = "ds")
-#             ) %>% 
-#   mutate(#pct_error = (pageview_sum - yhat_zero_floor) / pageview_sum * 100,
-#            sqrd_error = (pageview_sum - yhat_zero_floor)^2 
-#            ) %>% 
-#     arrange(date)
 
 accuracy_extrap_prophet <-
   pmap(.l = list(a = accuracy_extrap_arima_xreg),
@@ -5687,12 +5395,12 @@ saveRDS(add_el_stop_id,
                )
         )
 
-add_el_stop_id <-
-  readRDS(paste0(wd,
-                 "/Models/",
-                 "add_el_stop_id.Rds"
-                 )
-          )
+# add_el_stop_id <-
+#   readRDS(paste0(wd,
+#                  "/Models/",
+#                  "add_el_stop_id.Rds"
+#                  )
+#           )
 
 
 names(add_el_stop_id$`40600`)
@@ -5737,12 +5445,13 @@ saveRDS(run_times,
 ```
 
 
-## Testing Using Keras for LSTM
+## Keras for LSTM
+
 ### Based on examples from [http://www.business-science.io/timeseries-analysis/2018/07/01/keras-lstm-sunspots-part2.html](http://www.business-science.io/timeseries-analysis/2018/07/01/keras-lstm-sunspots-part2.html) and [https://tensorflow.rstudio.com/blog/sunspots-lstm.html](https://tensorflow.rstudio.com/blog/sunspots-lstm.html)  
-  
-  Try an example on just the most recent split for one `el_stop_id`.  
+
+#### Try an example on just the most recent split for one `el_stop_id`.  
     
-  First, setup the infrastructure.
+  First, I create the train/val/test datasets.
 ```{r}
 
 example_split <- add_el_stop_id$`40600`$splits[[13]]
@@ -5804,8 +5513,12 @@ df %>%
 # rm(list = ls(pattern = "df_"))
 rm(list = ls(pattern = "example_split"))
 
+```
+  
+    
+  Now I center and scale the data.
+```{r}
 
-##### Center & Scaling the data
 rec_obj <- recipe(el_rides ~ ., df) %>% 
   step_sqrt(el_rides) %>% 
   step_center(el_rides) %>% 
@@ -5814,34 +5527,20 @@ rec_obj <- recipe(el_rides ~ ., df) %>%
 
 df_processed_tbl <- bake(rec_obj, df)
 
-View(df_processed_tbl)
+# View(df_processed_tbl)
 
 center_history <- rec_obj$steps[[2]]$means["el_rides"]
 scale_history  <- rec_obj$steps[[3]]$sds["el_rides"]
 
 c("center" = center_history, "scale" = scale_history)
 
+```
+  
+    
+  Functions used to build out the LSTM infrastructure.
+```{r}
 
-##### Shaping the data for LSTM modeling
-# These variables are being defined just because of the order in which we present things in this post (first the data, then the model). They will be superseded by FLAGS$n_timesteps, FLAGS$batch_size and n_predictions in the following snippet
-
-# From [http://www.business-science.io/timeseries-analysis/2018/07/01/keras-lstm-sunspots-part2.html](http://www.business-science.io/timeseries-analysis/2018/07/01/keras-lstm-sunspots-part2.html)
-# Keras LSTM expects the input as well as the target data to be in a specific shape. The input has to be a 3-d array of size num_samples, num_timesteps, num_features.
-# 
-# Here, num_samples is the number of observations in the set. This will get fed to the model in portions of batch_size. The second dimension, num_timesteps, is the length of the hidden state we were talking about above. Finally, the third dimension is the number of predictors we’re using. For univariate time series, this is 1.
-
-n_timesteps <- 7
-n_predictions <- n_timesteps
-batch_size <- 28
-
-# t(sapply(1:(length(train_vals) - (14 + 14) + 1),
-#          function(x)
-#            train_vals[x:(x + (14 + 14) - 1)]
-#          )
-#   )
-
-
-# functions used
+# create the matrix
 build_matrix <- function(tseries, overall_timesteps) {
   t(sapply(1:(length(tseries) - overall_timesteps + 1),
            function(x) 
@@ -5850,6 +5549,8 @@ build_matrix <- function(tseries, overall_timesteps) {
     )
   }
 
+
+# update the dimensiions
 reshape_X_3d <- function(X) {
   dim(X) <- c(dim(X)[1],
               dim(X)[2],
@@ -5858,8 +5559,12 @@ reshape_X_3d <- function(X) {
   X
   }
 
+```
+  
+    
+  Extract el_rides from data frames.
+```{r}
 
-###### extract el_rides from data frame
 train_vals <- df_processed_tbl %>% 
   filter(key == "01_training") %>%
   select(el_rides) %>%
@@ -5875,16 +5580,32 @@ test_vals <- df_processed_tbl %>%
   select(el_rides) %>%
   pull()
 
+```
+  
+    
+  Here I shape the data for LSTM modeling.
+```{r}
+
+# From [http://www.business-science.io/timeseries-analysis/2018/07/01/keras-lstm-sunspots-part2.html](http://www.business-science.io/timeseries-analysis/2018/07/01/keras-lstm-sunspots-part2.html)
+# Keras LSTM expects the input as well as the target data to be in a specific shape. The input has to be a 3-d array of size num_samples, num_timesteps, num_features.
+# 
+    # Num_samples is the number of observations in the set. This will get fed to the model in portions of batch_size. 
+    # The second dimension, num_timesteps, is the length of the hidden state we were talking about above. 
+    # Finally, the third dimension is the number of predictors we’re using. For univariate time series, this is 1.
+
+n_timesteps <- 7
+n_predictions <- n_timesteps
+batch_size <- 28
+
 
 ###### build the windowed matrices
 train_matrix <- build_matrix(train_vals, n_timesteps + n_predictions)
 valid_matrix <- build_matrix(valid_vals, n_timesteps + n_predictions)
 test_matrix <- build_matrix(test_vals, n_timesteps + n_predictions)
 
+
 ###### separate matrices into training and testing parts
 # also, discard last batch if there are fewer than batch_size samples (a purely technical requirement)
-# nrow(X_train) %/% 360 * 360
-# nrow(X_valid) %/% 360 * 360
 X_train <- train_matrix[, 1:n_timesteps]
 y_train <- train_matrix[, (n_timesteps + 1):(n_timesteps * 2)]
 X_train <- X_train[1:(nrow(X_train) %/% batch_size * batch_size), ]
@@ -5900,7 +5621,8 @@ y_test <- test_matrix[, (n_timesteps + 1):(n_timesteps * 2)]
 X_test <- X_test[1:(nrow(X_test) %/% batch_size * batch_size), ]
 y_test <- y_test[1:(nrow(y_test) %/% batch_size * batch_size), ]
 
-# add on the required third axis
+
+###### add on the required third axis
 X_train <- reshape_X_3d(X_train)
 X_valid <- reshape_X_3d(X_valid)
 X_test <- reshape_X_3d(X_test)
@@ -5908,38 +5630,6 @@ X_test <- reshape_X_3d(X_test)
 y_train <- reshape_X_3d(y_train)
 y_valid <- reshape_X_3d(y_valid)
 y_test <- reshape_X_3d(y_test)
-
-
-
-# to find the optimal parameter settings, looping through for a make-shift grid-search of parameters
-
-# original settings in sequential loop
-  # for (#lrn_rate in seq(0.00, 0.003, 0.001)
-  #      lrn_rate in seq(0.00, 0.001, 0.001)
-  #      ) {
-  #   for #(rec_drpout in seq(0.0, 0.2, 0.1)
-  #       (rec_drpout in seq(0.0, 0.1, 0.1)
-  #        ) {
-  #     for #(drpout in seq(0.0, 0.2, 0.1)
-  #         (drpout in seq(0.1, 0.1, 0.1)
-  #     ) {
-  #       for #(momntm in seq(0.7, 0.9, 0.1)
-  #           (momntm in seq(0.9, 0.9, 0.1)
-  #       ) {
-
-
-
-# # Root Mean Squared Error (needed for accuracy stats)
-# rmse_metric <-
-#   custom_metric("rmse_metric",
-#                 function(y_true, y_pred) {
-#                   K <- backend()
-#                   K$sqrt(K$mean(K$square(K$relu(y_pred - y_true)
-#                                          )
-#                                 )
-#                          )
-#                   }
-#                 )
 
 ```
   
@@ -5958,7 +5648,7 @@ tot_cores <- detectCores()
 cl <- makeCluster(tot_cores - 1)
 registerDoParallel(cl)
 
-# 3 * 2 * 2 * 3 * 2 = 72 different combinations tried
+# 3 * 3 * 2 * 2 * 2 = 72 different combinations tried
 # set the outer-most-loop with lrn_rate as it has the most number of possibilities
 
 keras_parameter_tuning_trials <-
@@ -5967,21 +5657,21 @@ keras_parameter_tuning_trials <-
           .combine = c,
           .verbose = FALSE
           ) %:%
-  foreach(rec_drpout = seq(0.1, 0.2, 0.1), # seq(0.0, 0.2, 0.1)
-          .packages = c("tfruns", "keras", "tidyverse", "purrr", "yardstick"),
-          .combine = c,
-          .verbose = FALSE
-          ) %:%
-  foreach(drpout = seq(0.1, 0.2, 0.1), # seq(0.0, 0.2, 0.1)
-          packages = c("tfruns", "keras", "tidyverse", "purrr", "yardstick"),
-          .combine = c,
-          .verbose = FALSE
-          ) %:% 
   foreach(decay = seq(0.001, 0.003, 0.001), # seq(0.002, 0.003, 0.001)
           packages = c("tfruns", "keras", "tidyverse", "purrr", "yardstick"),
           .combine = c,
           .verbose = FALSE
           ) %:% 
+  foreach(drpout = seq(0.1, 0.2, 0.1), # seq(0.0, 0.2, 0.1)
+          packages = c("tfruns", "keras", "tidyverse", "purrr", "yardstick"),
+          .combine = c,
+          .verbose = FALSE
+          ) %:% 
+  foreach(rec_drpout = seq(0.1, 0.2, 0.1), # seq(0.0, 0.2, 0.1)
+          .packages = c("tfruns", "keras", "tidyverse", "purrr", "yardstick"),
+          .combine = c,
+          .verbose = FALSE
+          ) %:%
   foreach(momntm = seq(0.8, 0.9, 0.1), # eq(0.7, 0.9, 0.1)
           packages = c("tfruns", "keras", "tidyverse", "purrr", "yardstick"),
           .combine = c,
@@ -6003,9 +5693,9 @@ FLAGS <- flags(
   # This will actually stack exactly one additional layer of LSTM units.
   flag_boolean("stack_layers", FALSE),
   # number of samples fed to the model in one go
-  flag_integer("batch_size", 28),  # 180
+  flag_integer("batch_size", batch_size),  # 28  --  # 180
   # size of the hidden state, equals size of predictions
-  flag_integer("n_timesteps", 7),
+  flag_integer("n_timesteps", n_timesteps), # 7
   # how many epochs to train for
   flag_integer("n_epochs", 100),
   # loss function. Found to work better for this specific case than mean squared error
@@ -6018,22 +5708,24 @@ FLAGS <- flags(
   # parameter to the early stopping callback
   flag_integer("patience", 10),
   
-  # fraction of the units to drop for the linear transformation of the inputs
-  flag_numeric("dropout", 0.2), # 0.2  drpout
-  # fraction of the units to drop for the linear transformation of the recurrent state
-  flag_numeric("recurrent_dropout", 0.2), # 0.2  rec_drpout
   # learning rate
   flag_numeric("lr", 0.003), # 0.003  lrn_rate
   # learning rate decay
   flag_numeric("decay", 0.003), # 0.003  decay
+  # fraction of the units to drop for the linear transformation of the inputs
+  flag_numeric("dropout", 0.2), # 0.2  drpout
+  # fraction of the units to drop for the linear transformation of the recurrent state
+  flag_numeric("recurrent_dropout", 0.2), # 0.2  rec_drpout
   # momentum, an additional parameter to the SGD optimizer
   flag_numeric("momentum", 0.9) # 0.9  momntm
 )
 
 # the number of predictions we'll make equals the length of the hidden state
 n_predictions <- FLAGS$n_timesteps
+
 # how many features = predictors we have
 n_features <- 1
+
 # just in case we wanted to try different optimizers, we could add here
 optimizer <- switch(FLAGS$optimizer_type,
                     sgd = optimizer_sgd(lr = FLAGS$lr,
@@ -6082,8 +5774,8 @@ model %>% time_distributed(layer_dense(units = 1))
 # summary(model)
 
 
-# Root Mean Squared Error (needed for accuracy stats)
-# (must be defined within the Keras loop)
+##### Root Mean Squared Error (needed for accuracy stats)
+# this must be defined within the Keras loop
 rmse_metric <-
   custom_metric("rmse_metric",
                 function(y_true, y_pred) {
@@ -6146,14 +5838,7 @@ if (FLAGS$stateful)
 # plot(history, metrics = "rmse_metric")
 
 
-# model %>% evaluate(X_train, y_train, verbose = 0)
-
-
-# model
-# model_s
-
-
-#### Calculate MAPE
+##### Calculate MAPE
 ## Training Set
 pred_train <- model %>%
   predict(X_train, batch_size = FLAGS$batch_size) %>%
@@ -6234,6 +5919,9 @@ rmse_train
 name <- paste0("learningrate_",
                lrn_rate,
                "___",
+               "decay_",
+               decay,
+               "___",
                "dropout_",
                drpout,
                "___",
@@ -6241,19 +5929,9 @@ name <- paste0("learningrate_",
                rec_drpout,
                "___",
                "momentum_",
-               momntm,
-               "___",
-               "decay_",
-               decay
+               momntm
                )
 
-# tri_list <- list()
-# tri_list[[name]] <- list(model_train = model,
-#                          mape_train = mape_train,
-#                          compare_train = compare_train
-#                          )
-#     
-#     return(tri_list)
 
 rmse_train_list <- list()
 rmse_train_list[[name]] <- rmse_train
@@ -6268,36 +5946,6 @@ rm(cl)
 runtime_dopar <- proc.time() - start
 runtime_dopar
 rm(start)
-
-# saving is done to avoid having to run the models again
-# saveRDS(keras_parameter_tuning_trials,
-#         paste0(wd,
-#                "/Data_Processed/",
-#                "keras_parameter_tuning_trials.Rds"
-#                )
-#         )
-# 
-# saveRDS(runtime_dopar,
-#         paste0(wd,
-#                "/Data_Processed/",
-#                "runtime_dopar.Rds"
-#                )
-#         )
-
-
-# keras_parameter_tuning_trials <-
-#   readRDS(paste0(wd,
-#                  "/Data_Processed/",
-#                  "keras_parameter_tuning_trials.Rds"
-#                  )
-#           )
-# 
-# runtime_dopar <-
-#   readRDS(paste0(wd,
-#                  "/Data_Processed/",
-#                  "runtime_dopar.Rds"
-#                  )
-#           )
 
 ```
   
@@ -6324,10 +5972,10 @@ rmse_vals_df <-
   bind_rows(rmse_vals_list) %>% 
   separate(col = parameters,
            into = c("learn_rate",
+                    "decay",
                     "dropout",
                     "recurrent_dropout",
-                    "momentum",
-                    "decay"
+                    "momentum"
                     ),
            sep = "___",
            remove = FALSE
@@ -6335,6 +5983,12 @@ rmse_vals_df <-
   separate(col = learn_rate,
            into = c("lrn_rate",
                     "lrn_rate_value"
+                    ),
+           sep = "_"
+           ) %>% 
+  separate(col = decay,
+           into = c("decay",
+                    "decay_value"
                     ),
            sep = "_"
            ) %>% 
@@ -6355,12 +6009,6 @@ rmse_vals_df <-
                     "momtum_value"
                     ),
            sep = "_"
-           ) %>% 
-  separate(col = decay,
-           into = c("decay",
-                    "decay_value"
-                    ),
-           sep = "_"
            )
 
 
@@ -6369,6 +6017,7 @@ runtime_dopar
 # View(rmse_vals_df)
 rmse_vals_df %>% 
   arrange(rmse)
+
 View(rmse_vals_df %>% 
        arrange(rmse)
      )
@@ -6422,15 +6071,11 @@ FLAGS <- flags(
   # This will actually stack exactly one additional layer of LSTM units.
   flag_boolean("stack_layers", FALSE),
   # number of samples fed to the model in one go
-  flag_integer("batch_size", 28),  # 180
+  flag_integer("batch_size", batch_size),  # 28  # 180
   # size of the hidden state, equals size of predictions
-  flag_integer("n_timesteps", 7),
+  flag_integer("n_timesteps", n_timesteps),  # 7
   # how many epochs to train for
   flag_integer("n_epochs", 100),
-  # fraction of the units to drop for the linear transformation of the inputs
-  flag_numeric("dropout", best_settings$drpout_value), # 0.2  drpout
-  # fraction of the units to drop for the linear transformation of the recurrent state
-  flag_numeric("recurrent_dropout", best_settings$rec_drpout_value), # 0.2  rec_drpout
   # loss function. Found to work better for this specific case than mean squared error
   flag_string("loss", "logcosh"),  # mape
   # optimizer = stochastic gradient descent. Seemed to work better than adam or rmsprop here
@@ -6438,26 +6083,28 @@ FLAGS <- flags(
   flag_string("optimizer_type", "adam"),  # sgd
   # size of the LSTM layer
   flag_integer("n_units", 128),
+  # parameter to the early stopping callback
+  flag_integer("patience", 10),
+  
   # learning rate
   flag_numeric("lr", best_settings$lrn_rate_value), # 0.003  lrn_rate
   # learning rate decay
   flag_numeric("decay", best_settings$decay_value), # 0.003  decay
+  # fraction of the units to drop for the linear transformation of the inputs
+  flag_numeric("dropout", best_settings$drpout_value), # 0.2  drpout
+  # fraction of the units to drop for the linear transformation of the recurrent state
+  flag_numeric("recurrent_dropout", best_settings$rec_drpout_value), # 0.2  rec_drpout
   # momentum, an additional parameter to the SGD optimizer
-  flag_numeric("momentum", best_settings$momtum_value), # 0.9  momntm
-  # parameter to the early stopping callback
-  flag_integer("patience", 10)
+  flag_numeric("momentum", best_settings$momtum_value) # 0.9  momntm
   )
-# FLAGS$dropout             <-    as.numeric(best_settings$drpout_value)
-# FLAGS$recurrent_dropout   <-    as.numeric(best_settings$rec_drpout_value)
-# FLAGS$lr                  <-    as.numeric(best_settings$lrn_rate_value)
-# FLAGS$decay               <-    as.numeric(best_settings$decay_value)
-# FLAGS$momentum            <-    as.numeric(best_settings$momtum_value)
 
 
 # the number of predictions we'll make equals the length of the hidden state
 n_predictions <- FLAGS$n_timesteps
+
 # how many features = predictors we have
 n_features <- 1
+
 # just in case we wanted to try different optimizers, we could add here
 optimizer <- switch(FLAGS$optimizer_type,
                     sgd = optimizer_sgd(lr = FLAGS$lr,
@@ -6507,7 +6154,6 @@ if (FLAGS$stack_layers) {
 model %>% time_distributed(layer_dense(units = 1))
 
 # Root Mean Squared Error (needed for accuracy stats)
-# (must be defined within the Keras loop)
 rmse_metric <-
   custom_metric("rmse_metric",
                 function(y_true, y_pred) {
@@ -6666,7 +6312,7 @@ pred_test <- model %>%
 
 # Retransform values to original scale
 pred_test <- (pred_test * scale_history + center_history) ^2
-# pred_test[1:10, 1:5] %>% print()
+
 compare_test <- df %>% filter(key == "03_testing")
 
 # build a dataframe that has both actual and predicted values
@@ -6686,8 +6332,6 @@ for (i in 1:nrow(pred_test)
            )
   }
 
-# compare_test %>% write_csv(str_replace(model_path, ".hdf5", ".test.csv"))
-# compare_test[FLAGS$n_timesteps:(FLAGS$n_timesteps + 10), c(2, 4:8)] %>% print()
 
 coln <- colnames(compare_test)[4:ncol(compare_test)]
 cols <- coln %>% 
@@ -6765,11 +6409,6 @@ ggplot(compare_test,
   geom_line(aes(y = pred_test120), color = "cyan", na.rm = TRUE) +
   geom_line(aes(y = pred_test150), color = "red", na.rm = TRUE) +
   geom_line(aes(y = pred_test180), color = "green", na.rm = TRUE) +
-  # geom_line(aes(y = pred_test350), color = "cyan") +
-  # geom_line(aes(y = pred_test400), color = "red") +
-  # geom_line(aes(y = pred_test450), color = "green") +  
-  # geom_line(aes(y = pred_test500), color = "cyan") +
-  # geom_line(aes(y = pred_test550), color = "violet") +
   labs(title = "Keras LSTM Predictions on Test Set",
        subtitle = "L Stop ID 40600:  split 13 of 13"
        ) +
@@ -6785,7 +6424,7 @@ ggplot(compare_test,
 # Build the function
 obtain_predictions <-
   function(split) {
-    ##### split into train (2/3 of original train data), validation (1/3 of original train data), and test (original validation data)
+    # split into train (2/3 of original train data), validation (1/3 of original train data), and test (original validation data)
     keras_split_pt <-
       ((analysis(split) %>% 
           nrow()
@@ -6873,16 +6512,6 @@ obtain_predictions <-
       pull()
     
     
-    ###### build the windowed matrices
-    # build_matrix <- function(tseries, overall_timesteps) {
-    #   t(sapply(1:(length(tseries) - overall_timesteps + 1),
-    #            function(x)
-    #              tseries[x:(x + overall_timesteps - 1)]
-    #            )
-    #     )
-    #   
-    #   }
-    
     train_matrix <- build_matrix(train_vals, FLAGS$n_timesteps + n_predictions)
     valid_matrix <- build_matrix(valid_vals, FLAGS$n_timesteps + n_predictions)
     test_matrix <- build_matrix(test_vals, FLAGS$n_timesteps + n_predictions)
@@ -6907,15 +6536,6 @@ obtain_predictions <-
     X_test <- X_test[1:(nrow(X_test) %/% FLAGS$batch_size * FLAGS$batch_size), ]
     y_test <- y_test[1:(nrow(y_test) %/% FLAGS$batch_size * FLAGS$batch_size), ]
     
-    # add on the required third axis
-    reshape_X_3d <- function(X) {
-      dim(X) <- c(dim(X)[1],
-                  dim(X)[2],
-                  1
-                  )
-      
-      X
-      }
     
     X_train <- reshape_X_3d(X_train)
     X_valid <- reshape_X_3d(X_valid)
@@ -7181,14 +6801,11 @@ saveRDS(all_split_preds,
 ```
   
     
-  Calculate accuracy stats.
+  Calculate accuracy stats.  
+    
+  First, create the function to calculate the stats.
 ```{r}
 
-# all_split_preds$`40600`$predict[[1]]$train
-# all_split_preds$`40600`$predict[[1]]$test
-
-
-# function itself
 accuracy_stats <-
   function(df, stat_type) {
     coln <- colnames(df)[4:ncol(df)]
@@ -7229,14 +6846,11 @@ accuracy_stats <-
     return(result)
     }
 
-
-# length(all_split_preds)
-# names(all_split_preds)
-# 
-# length(all_split_preds$`ttb.gov/foia/frl.shtml`)
-# names(all_split_preds$`ttb.gov/foia/frl.shtml`)
-# length(all_split_preds$`ttb.gov/foia/frl.shtml`$splits)
-
+```
+  
+    
+  Munge the data to be able to run the `accuracy_stats` function.
+```{r}
 
 all_split_preds_unnest <-
   all_split_preds %>% 
@@ -7245,21 +6859,8 @@ all_split_preds_unnest <-
                )
       )
 
-# length(all_split_preds_unnest$`40600`$predict)
-# length(all_split_preds_unnest$`40910`$predict)
 names(all_split_preds_unnest$`40600`)
 
-# all_split_preds_individ <-
-#   pmap(.l = list(a = all_split_preds_unnest),
-#        .f = function(a) {
-#          lngth_tot = length(a$predict)
-#          
-#          a[seq(1, lngth_tot - 2, by = 3), ] # training sets are every other of 39 total sets
-#          }
-#        )
-
-# all_split_preds_unnest$`40600`$id %>% length()
-# all_split_preds_train$`40600`$id %>% length()
 
 all_split_preds_individ <-
   pmap(.l = list(a = all_split_preds_unnest),
@@ -7269,12 +6870,7 @@ all_split_preds_individ <-
          train_ = a[seq(1, lngth_tot - 2, by = 3), ] # train is the 1st of every 3 sets
          valid_ = a[seq(2, lngth_tot - 1, by = 3), ] # valid is the 2nd of every 3 sets
          test_ = a[seq(3, lngth_tot, by = 3), ] # test is the 3rd of every 3 sets
-         
-         # a$keras_predict.train = train_
-         # a$keras_perdict.valid = valid_
-         # a$keras_predict.test = test_
-         
-         # return(a)
+
          return(list(train = train_,
                      valid = valid_,
                      test = test_
@@ -7283,49 +6879,12 @@ all_split_preds_individ <-
          }
        )
 
-# all_split_preds_test <-
-#   pmap(.l = list(a = all_split_preds_unnest),
-#        .f = function(a) {
-#          lngth_tot = length(a$predict)
-#          
-#          a[seq(3, lngth_tot, by = 3), ] # testing sets are every other of 26 total sets
-#          }
-#        )
+```
+  
+    
+  Now I can run the `accuracy_stats` function to calculate the stats.
+```{r}
 
-# all_split_preds_test$`40600`$id %>% length()
- 
-# all_split_preds_individ$`40600`$train %>% View()
-# all_split_preds_individ$`40600`$train$predict[[1]] %>%
-#     accuracy_stats(stat_type = "rmse")
-
-# 
-# View(all_split_preds_train$`40910`$predict)
-# View(all_split_preds_train$`41660`$predict)
-
-# test <-
-#   all_split_preds_individ$`40910`$train %>%  
-#   select(el_stop_id, id, start_date, predict) %>% 
-#   mutate(rmse = map_dbl(predict,
-#                         ~ accuracy_stats(df = .x,
-#                                          stat_type = "rmse"
-#                                          )
-#                         ),
-#          mape = map_dbl(predict,
-#                         ~ accuracy_stats(df = .x,
-#                                          stat_type = "mape"
-#                                          )
-#                         )
-#          ) %>%
-#   select(-predict)
-# 
-# class(test)
-# View(test)
-# colnames(test)
-# View(test %>% select(id, start_date, rmse, mape))
-
-# all_split_preds_individ$`40600`$train %>% colnames()
-# all_split_preds_individ$`40600`$valid %>% colnames()
-# all_split_preds_individ$`40600`$test %>% colnames()
 
 # user   system  elapsed 
 # 2050.926  337.664 2625.468
@@ -7421,86 +6980,11 @@ saveRDS(all_split_rmse_mape,
                )
         )
 
-# all_split_rmse_mape <-
-#   readRDS(paste0(wd,
-#                  "/Models/",
-#                  "all_split_rmse_mape.Rds"
-#                  )
-#           )
-
-
-# user  system elapsed 
-# 228.691  33.500 269.695
-# ~ 5 min
-# start <- proc.time()
-# all_split_rmse_test <-
-#   pmap(.l = list(a = all_split_preds_test),
-#        .f = function(a) {
-#          a %>% 
-#            mutate(keras.extrap.rmse =
-#                     map_dbl(predict,
-#                             ~ accuracy_stats(df = .x,
-#                                              stat_type = "rmse"
-#                                              )
-#                             ),
-#                   keras.extrap.mape =
-#                     map_dbl(predict,
-#                             ~ accuracy_stats(df = .x,
-#                                              stat_type = "mape"
-#                                              )
-#                             )
-#                   ) %>% 
-#            # select(el_stop_id, id, start_date, keras_rmse, keras_mape) %>% 
-#            select(-predict)
-#          }
-#        )
-# 
-# runtime_accuracy_stats_test <- proc.time() - start
-# runtime_accuracy_stats_test
-# rm(start)
-# 
-# saveRDS(all_split_rmse_test,
-#         paste0(wd,
-#                "/Models/",
-#                "all_split_rmse_test.Rds"
-#                )
-#         )
-
-# all_split_rmse_test <-
-#   readRDS(paste0(wd,
-#                  "/Data_Processed/",
-#                  "all_split_rmse_test.Rds"
-#                  )
-#           )
-
-
-all_split_rmse_mape %>% 
-  map(~ View(.x))
-
 ```
-
-
+  
+    
+  Now I calculate the median and mean stats for each type of model.
 ```{r}
-
-# all_split_rmse_train$`40600` %>% 
-#   gather(key = "model",
-#          value = "value",
-#          -id,
-#          -start_date,
-#          -el_stop_id
-#          ) %>% 
-#   group_by(el_stop_id,
-#            model
-#            ) %>% 
-#   summarise(mean = mean(value, na.rm = TRUE),
-#             median = median(value, na.rm = TRUE)
-#             ) %>% 
-#   ungroup() %>% 
-#   arrange(el_stop_id,
-#           # model,
-#           median
-#           )
-
 
 mean_med_stats <-
   all_split_rmse_mape %>% 
@@ -7512,7 +6996,7 @@ mean_med_stats <-
                -el_stop_id
                ) %>% 
         filter(#!str_detect(model, "extrapolation"),
-               !str_detect(model, "mape"),
+               !str_detect(model, "mape"), # mape was only used for Keras, whereas rmse was used in all models (including Keras)
                ) %>% 
         group_by(el_stop_id,
                  model
@@ -7521,11 +7005,6 @@ mean_med_stats <-
                   median = median(value, na.rm = TRUE)
                   ) %>% 
         ungroup() %>% 
-        # separate(col = model,
-        #          into = c("mod", "stat_type"),
-        #          sep = "\\.",
-        #          remove = FALSE
-        #          ) %>% 
         arrange(el_stop_id,
                 median
                 ) %>% 
@@ -7545,7 +7024,6 @@ mean_med_stats <-
   ungroup() %>% 
   arrange(stat_type,
           el_stop_id,
-          # model,
           median
           )
 
@@ -7555,17 +7033,13 @@ View(mean_med_stats)
 ```
 
 
-
-
-
-
 ## Visualize the Accuracy Measures   
     
   Plot interpolation and extrapolation over time, by model.
 ```{r}
 
 plot_interp_extrap <-
-  add_el_stop_id %>% 
+  all_split_rmse_mape %>% 
   map(~ select(.x,
                arima.interpolation,
                arima.extrapolation,
@@ -7583,12 +7057,16 @@ plot_interp_extrap <-
                h2o.extrapolation,
                h2o.limvars.interpolation,
                h2o.limvars.extrapolation,
+               keras.interpolation_rmse,
+               keras.extrapolation_rmse,
                start_date,
                el_stop_id
                ) %>%
         as.data.frame %>% 
         rename(h2o_limvars.interpolation = h2o.limvars.interpolation,
-               h2o_limvars.extrapolation = h2o.limvars.extrapolation
+               h2o_limvars.extrapolation = h2o.limvars.extrapolation,
+               keras.interpolation = keras.interpolation_rmse,
+               keras.extrapolation = keras.extrapolation_rmse
                ) %>% 
         gather(error, RMSE, -start_date, -el_stop_id) %>% 
         separate(error,
@@ -7623,7 +7101,7 @@ plot_interp_extrap
 ```{r}
 
 median_RMSE_by_model <-
-  pmap(.l = list(a = add_el_stop_id),
+  pmap(.l = list(a = all_split_rmse_mape),
        .f = function(a) {
          med.arima = median(a$arima.extrapolation)
          med.arima_xreg = median(a$arima_xreg.extrapolation)
@@ -7633,6 +7111,7 @@ median_RMSE_by_model <-
          med.xgb = median(a$xgb.extrapolation)
          med.h2o = median(a$h2o.extrapolation)
          med.h2o_limvars = median(a$h2o.limvars.extrapolation)
+         med.keras = median(a$keras.extrapolation_rmse)
          
          med_extrap_all_models =
            data.frame(el_stop_id = unique(a$el_stop_id),
@@ -7643,7 +7122,8 @@ median_RMSE_by_model <-
                       rf = med.rf,
                       xgb = med.xgb,
                       h2o = med.h2o,
-                      h2o_limvars = med.h2o_limvars
+                      h2o_limvars = med.h2o_limvars,
+                      keras = med.keras
                       )
          
          return(med_extrap_all_models)
@@ -7677,373 +7157,19 @@ median_RMSE_by_model %>%
                 ),
             size = 3,
             hjust = 1
-            # nudge_y = -50
             ) +
   facet_wrap(~ el_stop_id,
              ncol = 2,
              scales = "free"
              ) +
-  # scale_y_continuous(limits = c(0, max(test$RMSE_med)),
-  #                    breaks = seq(0, max(test$RMSE_med), 25)
-  #                    ) +
-  # expand_limits(y = range_act) +
   coord_flip() +
   theme_bw() +
-  theme(legend.position = "none")
+  theme(legend.position = "none") +
+  NULL
 
 
 rm(median_RMSE_by_model)
 
 ```
-
-
-## Visualize Actual vs Models
-**NOTE: plotting is just for extrapolation data**  
-  
-  Prepare the data by first getting all actuals and forecasts.
-```{r}
-
-# function to munge the data
-func_get_forecast_data <-
-  function(el_stop_id) {
-    data_assessment_list =
-      map(.x = el_stop_id$splits,
-          .f = function(a) {
-            extrap =
-              assessment(a) %>% 
-              select(el_date,
-                     el_stop_id,
-                     el_rides
-                     ) %>% 
-              rename(actual = el_rides)
-            
-            return(extrap)
-            }
-          )
-  # add_el_stop_id$`40600`$splits %>% assessment() %>% select(el_date, el_stop_id, el_rides) %>% rename(actual = el_rides) %>% nrow()
-  data_arima_list =
-    el_stop_id$arima.forecast %>% 
-    map(~ select(.x,
-                 el_date,
-                 # full_url,
-                 pred_zero_floor
-                 ) %>% 
-          # mutate(model_arima = "arima") %>%
-          rename(yhat.arima = pred_zero_floor)
-        )
- 
-  data_arima_xreg_list =
-    el_stop_id$arima_xreg.forecast %>% 
-    map(~ select(.x,
-                 el_date,
-                 # full_url,
-                 pred_zero_floor
-                 ) %>% 
-          # mutate(model_arima = "arima") %>%
-          rename(yhat.arima_xreg = pred_zero_floor)
-        )
-  
-  data_prophet_list =
-    el_stop_id$prophet.forecast %>% 
-    map(~ select(.x,
-                 ds,
-                 yhat_zero_floor
-                 ) %>% 
-          mutate_at(vars(ds), as.Date) %>% 
-          # mutate(model_prophet = "prophet") %>% 
-          rename(yhat.prophet = yhat_zero_floor)
-        )
-  
-  data_prophet_hol_list =
-    el_stop_id$prophet_hol.forecast %>% 
-    map(~ select(.x,
-                 ds,
-                 yhat_zero_floor
-                 ) %>% 
-          mutate_at(vars(ds), as.Date) %>% 
-          # mutate(model_prophet = "prophet") %>% 
-          rename(yhat.prophet_hol = yhat_zero_floor)
-        )
-  
-  data_rf_list =
-    el_stop_id$rf.forecast_extrap %>% 
-    map(~ select(.x,
-                 el_date,
-                 yhat_zero_floor
-                 ) %>% 
-          rename(yhat.rf = yhat_zero_floor)
-        )
-  
-  data_xgb_list =
-    el_stop_id$xgb.forecast_extrap %>% 
-    map(~ select(.x,
-                 el_date,
-                 yhat_zero_floor
-                 ) %>% 
-          rename(yhat.xgb = yhat_zero_floor)
-        )
-  # add_el_stop_id$`40600`$h2o.limvars.extrap.forecast[[1]] %>% 
-  #   rename(yhat.h2o = yhat) %>%  
-  #   mutate(el_date = as_date(el_date)
-  #          ) %>% 
-  #   str()
-  data_h2o_list = 
-    el_stop_id$h2o.extrap.forecast %>% 
-    map(~ rename(.x,
-                 yhat.h2o = yhat
-                 ) %>% 
-          # mutate(el_date = as_date(el_date)
-          #        ) %>% 
-          select(yhat.h2o)
-        )
-  
-  data_h2o_limvars_list = 
-    el_stop_id$h2o.limvars.extrap.forecast %>% 
-    map(~ rename(.x,
-                 yhat.h2o_limvars = yhat
-                 ) %>% 
-          # mutate(el_date = as_date(el_date)
-          #        ) %>% 
-          select(yhat.h2o_limvars)
-        )
-  
-  full_data_list =
-    pmap(.l = list(a = data_assessment_list,
-                   b = data_arima_list,
-                   c = data_arima_xreg_list,
-                   d = data_prophet_list,
-                   e = data_prophet_hol_list,
-                   f = data_rf_list,
-                   g = data_xgb_list, 
-                   h = data_h2o_list,
-                   i = data_h2o_limvars_list
-                   ),
-         .f = function(a, b, c, d, e, f, g, h, i) {
-           a %>% 
-             left_join(b,
-                       by = "el_date"
-                       ) %>% 
-             left_join(c,
-                       by = "el_date"
-                       ) %>% 
-             left_join(d,
-                       by = c("el_date" = "ds")
-                       ) %>% 
-             left_join(e,
-                       by = c("el_date" = "ds")
-                       ) %>% 
-             left_join(f,
-                       by = "el_date"
-                       ) %>% 
-             left_join(g,
-                       by = "el_date"
-                       ) %>% 
-             # left_join(h,
-             #           by = "el_date"
-             #           ) %>% 
-             # left_join(i,
-             #           by = "el_date"
-             #           ) %>% 
-             bind_cols(h) %>% 
-             bind_cols(i)
-           }
-         )
-  
-  full_data = bind_rows(full_data_list)
-  
-  return(full_data)
-  }
-
-
-# run the function for each value of `el_stop_id`
-forecast_data_list <-
-  add_el_stop_id %>% 
-  map(~ func_get_forecast_data(.x)
-      )
-
-```
-  
-    
-  Now I munge the resulting data for plotting.
-```{r}
-
-# View(forecast_data_list$`40600`)
-forecast_data_to_plot_list <-
-  forecast_data_list %>% 
-  map(~ gather(.x,
-               key = "key",
-               value = "el_rides",
-               yhat.arima,
-               yhat.arima_xreg,
-               yhat.prophet,
-               yhat.prophet_hol,
-               yhat.rf,
-               yhat.xgb,
-               yhat.h2o,
-               yhat.h2o_limvars,
-               actual
-               ) %>% 
-        arrange(el_date,
-                key
-                )
-      )
-
-# View(forecast_data_to_plot_list[[1]])
-
-
-rm(forecast_data_list)
-
-```
-  
-    
-  And here I create the plot itself.
-```{r}
-
-clrs <- c("actual" = "black",
-          "yhat.arima" = "red",
-          "yhat.arima_xreg" = "green",
-          "yhat.prophet" = "blue",
-          "yhat.prophet_hol" = "orange",
-          "yhat.rf" = "purple",
-          "yhat.xgb" = "pink",
-          "yhat.h2o" = "yellow",
-          "yhat.h2o_limvars" = "lightblue"
-          )
-
-lne_ <- c("solid",
-          "dashed",
-          "dashed",
-          "dashed",
-          "dashed",
-          "dashed",
-          "dashed",
-          "dashed",
-          "dashed"
-          )
-
-
-plot_actuals_vs_models <-
-  forecast_data_to_plot_list %>%  
-  map(~ .x %>% 
-        mutate(l_type = if_else(key == "actual",
-                                "actual",
-                                "forecast"
-                                )#,
-               # l_size = if_else(key == "actual",
-               #                  1.5,
-               #                  1
-               #                  )
-               ) %>% 
-        ggplot(aes(x = el_date,
-                   y = el_rides,
-                   color = key#,
-                   # group = l_type
-                   )
-               ) +
-        # facet_wrap(~ full_url,
-        #            scales = "free"
-        #            ) +
-        geom_point(na.rm = TRUE) +
-        geom_line(aes(linetype = l_type
-                      ),
-                  na.rm = TRUE
-                  ) +
-        scale_colour_manual(values = clrs
-                            ) +
-        scale_linetype_manual(values = lne_,
-                              guide = FALSE
-                              ) +
-        # scale_size_manual(values = c(4, 1, 1, 1, 1)
-        #                   ) +
-        scale_x_date(limits = c(max(.$el_date) - (7 * 4),
-                                max(.$el_date) + (7 * 1)
-                                )
-                     ) +
-        ggtitle(label = .$el_stop_id) +
-        theme_bw() +
-        theme(legend.position = "bottom")
-      )
-
-plot_actuals_vs_models
-
-
-rm(clrs, lne_, forecast_data_to_plot_list, func_get_forecast_data)
-
-```
-
-
-
-
-
-
-
-```{r}
-
-library("lime")
-
-local_obs <-
-  # h2o_train_tbl$`40600` %>%
-  # DV_nzv_predict$`40600` %>% 
-  h2o.limvars_train_tbl$`40600` %>%
-  filter(data.table::between(x = el_date,
-                             # lower = as_date("2015-12-21"),
-                             lower = as_date("2015-12-30"),
-                             upper = as_date("2016-01-04"),
-                             incbounds = TRUE
-                             )
-         )
-
-# View(h2o_train_tbl$`40600`)
-# View(DV_nzv_predict$`40600`)
-h2o_explainer <- 
-  lime::lime(
-             # x = h2o_train_tbl$`40600`,
-             # x = DV_nzv_predict$`40600`,
-             x = h2o.limvars_train_tbl$`40600`,
-             # model = h2o_automl_leader$`40600`,
-             # model = DV_Fit.Rf.corr_no$`40600`,
-             model = h2o.limvars_automl_leader$`40600`,
-             n_bins = 5
-             )
-
-h2o_explanation <-
-  lime::explain(local_obs,
-                h2o_explainer,
-                n_features = 5,
-                kernel_width = .1,
-                feature_select  = "highest_weights"
-                # feature_select = "lasso_path"
-                )
-
-# h2o_explanation
-
-plot_features(h2o_explanation)
-plot_explanations(h2o_explanation)
-
-```
-
-
-
-
- 
-```{r}
-
-rm(list = ls(pattern = "h2o"))
-rm(list = ls(pattern = "get"))
-rm(list = ls(pattern = "func"))
-rm(list = ls(pattern = "fit"))
-rm(list = ls(pattern = "time."))
-rm(list = ls(pattern = "DV"))
-rm(list = ls(pattern = "models"))
-rm(list = ls(pattern = "Models"))
-rm(list = ls(pattern = "prophet"))
-rm(list = ls(pattern = "Resample"))
-rm(list = ls(pattern = "plot"))
-rm(list = ls(pattern = "train"))
-rm(list = ls(pattern = "trn"))
-rm(holiday_dates, rds_files, roll_rs, x, y)
-
-```
-
 
 
