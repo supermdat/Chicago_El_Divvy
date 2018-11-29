@@ -138,13 +138,15 @@ rm(rds_file_names, rds_file_paths, index_not_weather)
 ```
 
     
-## Distance Between El and Divvy  
+## Feature Engineering
+
+### Distance Between El and Divvy  
   
   I think the proximity of a close Divvy station could affect El ridership, so here, I'll calculate:
   1. The distance between El and Divvy stations; and
   2. The number of Divvy stations that are "close" to an El station  
     
-### "Crow Flies" Distance  
+#### "Crow Flies" Distance  
   
   First, I just get get the necessary data sets.
   **Note 1:** As data for Divvy stations regularly includes multiple latitude and longitude values for the same station, I will simply take the average of these values.
@@ -276,7 +278,7 @@ rm(stations_el_divvy_all)
 ```
   
   
-## Calculate a feature counting the number of Divvy Stations within X miles of every El Station (on every day)
+#### Calculate a feature counting the number of Divvy Stations within X miles of every El Station (on every day)
   
     
   As some Divvy stations came online (came into use) on diffrent dates, here I manipulate the data to ensure combinations of El-Divvy stations are only counted after the Divvy station is in operation.  
@@ -456,7 +458,7 @@ rm(within_pt5miles_after_online)
 ```
   
     
-## Calculate a feature calculating the closest Divvy station to each El station (on every day)
+#### Calculate a feature calculating the closest Divvy station to each El station (on every day)
 **Note:** This must be done for each combination of date and El station as Divvy stations are only online (made available) after certain dates.  
   
   Because the combination of data leads to a very large data file, I use `purrr:pmap` to do the joining separatey for each `el_stop_id`, and then combine the results into a single data.table.  
@@ -585,7 +587,7 @@ rm(el_stns_dstnct, pmap_merge, el_stations_all_dates_dt)
 ```
   
     
-## Munge Divvy trips data into something more usable  
+#### Munge Divvy trips data into something more usable  
     
   Inspecting divvy trips by day. First, looking at groupings of the "from" station to the "to" station. These data are interesting, but look too infrequent to be very useful. Also, I don't believe the analyses at this level will vary greatly on where the trip was going to.
 ```{r}
@@ -774,9 +776,9 @@ rm(divvy_trips_by_day_l)
 ```
 
 
-## New Features
+### New Features
 
-### Within 0.5 Miles, Create Station Counts, Trip Counts, and Trip Time Statistics  
+#### Within 0.5 Miles, Create Station Counts, Trip Counts, and Trip Time Statistics  
   
   Original merge of the datasets.
 ```{r}
@@ -935,7 +937,7 @@ rm(el_stns_full_dates_within_pt5, the_merge)
 ```
   
 
-### Add in the general daily data (not by specific Divvy station) - i.e., the Divvy rides data for each day
+#### Add in the general daily data (not by specific Divvy station) - i.e., the Divvy rides data for each day
 ```{r}
 
 ## initial merge
@@ -1032,7 +1034,7 @@ rm(new_vars)
 ```
 
 
-### Add data on trip counts and trip times for the closest Divvy station to each El station (on each day)  
+#### Add data on trip counts and trip times for the closest Divvy station to each El station (on each day)  
   
   First merge daily data and data on the closest divvy stations.
 ```{r}
@@ -1140,7 +1142,7 @@ saveRDS(el_stns_full_dates_daily_stats_all,
 ```
 
 
-## Create the full dataset by merging in the additional data  
+### Create the full dataset by merging in the additional data  
     
   Merge in data on el rides.
 ```{r}
@@ -1378,7 +1380,7 @@ rm(add_weather, dates_dt)
 ```
 
 
-## Inspect Missing Values
+### Inspect Missing Values
 ```{r}
 
 summary(add_time)
@@ -1528,12 +1530,8 @@ saveRDS(data_no_missing,
 rm(weather_20171231)
 
 ```
-
-
-## Feature Engineering
-
-### Weather Variables
   
+    
   As the prediction forcast is 7 days in the future, I don't think we'll be able to accuratley know the temperature variables `tmin` and `tmax` within one degree of accuracy. So here, I simply test if knowing within `X` degrees of accuracy is viable.  
     
   Visually, it looks like 25 degrees may be a good range (this is a lot wider than I epected!).
