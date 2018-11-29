@@ -2339,6 +2339,22 @@ str(remove_first_28na_rows$`41140`)
 # View(remove_first_28na_rows$`41140`)
 
 
+saveRDS(remove_first_28na_rows,
+        paste0(wd,
+               "/Data/Interim/",
+               "remove_first_28na_rows.Rds"
+               )
+        )
+
+
+# remove_first_28na_rows <-
+#   readRDS(paste0(wd,
+#                  "/Data/Interim/",
+#                  "remove_first_28na_rows.Rds"
+#                  )
+#           )
+
+
 remove_first_28na_rows %>% 
   map(~ #select(.x,
         #        -matches("holiday")
