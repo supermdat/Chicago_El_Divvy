@@ -1,0 +1,527 @@
+---
+title: "Step 02: Modeling Setup"
+output:
+  html_document:
+    df_print: paged
+---
+  
+## Setup    
+  Load the relevant libraries.
+```{r, message=FALSE, warning=FALSE}
+
+# rm(list = ls())
+# .rs.restartR()
+
+
+# data manipulation
+library("plyr")
+library("tidyverse")
+library("magrittr")
+library("data.table")
+library("lubridate")
+library("sqldf")
+
+
+# time series specific packages
+library("timetk")
+library("zoo")
+library("tibbletime")
+
+
+# modeling
+library("fpp2")
+library("prophet")
+library("caret")
+library("randomForest")
+library("xgboost")
+library("h2o")
+library("keras")
+# use_session_with_seed(123456789) # setting the seed to obtain reproducible results
+# see https://keras.rstudio.com/articles/faq.html#how-can-i-obtain-reproducible-results-using-keras-during-development and https://cran.r-project.org/web/packages/keras/vignettes/faq.html
+# can also re-enable gpu and parallel processing by using:  use_session_with_seed(42, disable_gpu = FALSE, disable_parallel_cpu = FALSE)
+
+
+
+# other
+library("geosphere")          # specific for distance calculations from lat-lon pairs
+library("naniar")             # inspecting missing data
+library("rlang")              # building functions
+library("recipes")            # used in Keras modeling to design matrices
+library("rsample")            # rolling samples for validation stats
+library("tfruns")             # used in Keras modeling for trainin runs
+library("stringr")            # string manipulation
+library("ggplot2")            # viz
+library("sweep")              # more easily pull out model statistics
+library("yardstick")          # easily calculate accuracy stats
+library("doParallel")         # parallel processing
+
+```
+  
+    
+  Session Info.
+```{r}
+
+sessionInfo()
+
+```
+  
+    
+  Setup the root directory.
+```{r "setup", include = FALSE}
+
+require("knitr")
+
+opts_knit$set(root.dir = "/Users/mdturse/Desktop/Analytics/Chicago_El_Divvy/")
+
+```
+  
+    
+  Setting `wd` as the working directory.
+```{r}
+
+wd <- getwd()
+
+wd
+
+```
+
+
+## Modeling
+
+### Model Prep
+
+#### Add An Indicator for Train-Validation-Test
+
+**NOTE: `remove_first_28na_rows` is the output produced in Step 01**
+```{r}
+
+remove_first_28na_rows <-
+  readRDS(paste0(wd,
+                 "/Data/Interim/",
+                 "remove_first_28na_rows.Rds"
+                 )
+          )
+
+```  
+  
+    
+  I'll be testing models that use the entire dataset, and also models that are specific to each `el_stop_id` (i.e., a model for each El entry point). Therefore, I'll create train-test splits (at 70% of the data) for each group.  
+    
+  First, I'll create a function to to create the proper value depending on the situation (i.e., creating the split for the entire dataset, or for each value of `el_stop_id` as a single entity).
+```{r}
+
+func_train_test_indicator <-
+  function(data, date_var, train_val_pct, train_pct, new_col_suffix) {
+    # get needed variables
+    date_var_enquo = enquo(date_var)
+    
+    date_min = data %>% 
+      select(!!date_var_enquo) %>% 
+      distinct() %>% 
+      top_n(n = -1, wt = !!date_var_enquo) %>% 
+      pull(!!date_var_enquo)
+    
+    date_max = data %>% 
+      select(!!date_var_enquo) %>% 
+      distinct() %>% 
+      top_n(n = 1, wt = !!date_var_enquo) %>% 
+      pull(!!date_var_enquo)
+    
+    # train and validation split
+    days_trainval = round(train_val_pct * (date_max - date_min))
+    split_date_trainval = date_min + days_trainval
+
+    # train split
+    days_train = round(train_pct * (split_date_trainval - date_min))
+    split_date_train = date_min + days_train
+
+    # new dataset
+    new_data =
+      data %>%
+      mutate(new_var =
+               case_when(el_date < split_date_train ~ "01_train",
+                         between(x = el_date,
+                                 lower = split_date_train,
+                                 upper = split_date_trainval,
+                                 incbounds = TRUE
+                                 ) ~ "02_validation",
+                         TRUE ~ "03_test"
+                         )
+             )
+
+    colnames(new_data)[length(new_data)] = paste0("data_use_", new_col_suffix)
+    
+    return(new_data)
+  }
+
+```
+  
+    
+  Here I run the function for each value of `el_stop_id`.
+```{r}
+
+add_trn_val_test <-
+  remove_first_28na_rows %>% 
+  map(~ func_train_test_indicator(data = .x,
+                                  date_var = el_date,
+                                  train_val_pct = 0.8,
+                                  train_pct = 0.7,
+                                  new_col_suffix = "el_stop_id"
+                                  ) %>% 
+        mutate(wday.lbl = factor(as.character(wday.lbl)
+                                 )
+               )
+      ) 
+
+
+## Save the data to the proper folder
+saveRDS(add_trn_val_test,
+        paste0(wd,
+               "/Data/Interim/",
+               "add_trn_val_test.Rds"
+               )
+        )
+
+# add_trn_val_test <-
+#   readRDS(paste0(wd,
+#                  "/Data/Interim/",
+#                  "add_trn_val_test.Rds"
+#                  )
+#           )
+
+
+str(add_trn_val_test$`41140`)
+
+add_trn_val_test %>% 
+  map(~ group_by(.x,
+                 data_use_el_stop_id
+                 ) %>% 
+        summarise(date_min = min(el_date),
+                  date_max = max(el_date)
+                  )
+      )
+
+
+rm(remove_first_28na_rows, func_train_test_indicator)
+
+```
+
+
+
+  **To Delete (below) when no longer needed**
+  
+```{r}
+
+# add_trn_val_test <-
+#   readRDS(paste0(wd,
+#                  "/Data/Interim/",
+#                  "add_trn_val_test.Rds"
+#                  )
+#           )
+# 
+# 
+# str(add_trn_val_test$`41140`)
+
+```
+
+  **To Delete (above) when no longer needed**
+
+
+#### Handling Factor Variables  
+  
+  Turn factor variables into dummy variables. **NOTE** that this is done with all levels of the factor. That is, it does **NOT** use "full rank parameterization" to leave one level out (e.g., to be used as the linear model's intercept).
+```{r}
+
+# create the function to create dummy vars
+func_one_hot_vars <-
+  function(x) {
+    data_s = x %>% 
+      select(-holiday_comment,
+             -holiday,
+             -day,
+             -holiday_comment_l7,
+             -holiday_l7
+             )
+    
+    formula =
+      dummyVars(el_rides ~ .,
+                data = data_s %>% 
+                  select(-el_date,
+                         -el_stop_id,
+                         -data_use_el_stop_id
+                         ),
+                fullRank = FALSE
+                )
+    
+    data_DV =
+      data_s %>% 
+      select(el_rides,
+             el_date,
+             el_stop_id,
+             data_use_el_stop_id
+             ) %>% 
+      bind_cols(predict(object = formula,
+                        newdata = data_s %>% 
+                          select(-el_date,
+                                 -el_stop_id,
+                                 -data_use_el_stop_id
+                                 )
+                        ) %>% 
+                  as.data.frame()
+                )
+    }
+
+
+# run the function
+DV_data <-
+  add_trn_val_test %>% 
+  map(~ func_one_hot_vars(.x)
+      )
+
+glimpse(DV_data$`41140`)
+
+
+# rm(func_one_hot_vars)
+
+```
+ 
+ 
+#### Accuracy Metrics
+   
+  I'll try both `caret::randomForest` and `caret::xgboost` on the dataset USING dummy variables. But first, I need to create some custom accuracy metrics.
+```{r}
+
+func_custom_accuracy_metrics <-
+  function(data, lev = NULL, model = NULL) {
+    mae =
+      function(actual, predicted) {
+        mean(abs((actual - predicted)
+                 ),
+             na.rm = TRUE
+             )
+        }
+    
+    mape =
+      function(actual, predicted) {
+        mean(abs((actual - predicted) / actual * 100),
+             na.rm = TRUE
+             )
+        }
+    
+    rmse =
+      function(actual, predicted) {
+        sqrt(mean((actual - predicted)^2,
+                  na.rm = TRUE
+                  )
+             )
+        }
+    
+    r2 =
+      function(actual, predicted) {
+        1 - (sum((actual - predicted)^2
+                 ) / sum((actual - mean(actual)
+                          )^2
+                         )
+             )
+    }
+    
+    
+    out = c(mae(data$obs,
+                data$pred
+                ),
+            mape(data$obs,
+                 data$pred
+                 ),
+            rmse(data$obs,
+                 data$pred
+                 ),
+            r2(data$obs,
+               data$pred
+               )
+            )
+
+    
+    names(out) = c("MAE", "MAPE", "RMSE", "R2")
+    
+    out
+    }
+
+```
+
+
+#### Variable Reduction  
+  
+  First, limit to just training data, and confirm the datasets to use are the same (except for the one-hot-encoding producing dummy variables).
+```{r}
+
+train_data <-
+  add_trn_val_test %>% 
+  map(~ filter(.x,
+               data_use_el_stop_id == "01_train"
+               )
+      )
+
+DV_train_data <-
+  DV_data %>% 
+  map(~ filter(.x,
+               data_use_el_stop_id == "01_train"
+               )
+      )
+
+
+message("train_data")
+train_data %>% 
+  map(~ dim(.x)
+      )
+
+message("DV_train_data")
+DV_train_data %>% 
+  map(~ dim(.x)
+      )
+
+
+message("train_data")
+train_data$`41140` %>% glimpse()
+
+message("DV_train_data")
+DV_train_data$`41140` %>% glimpse()
+
+```
+
+
+  Now I reduce the number of variables by using `caret::nearZeroVar` and `caret::corr`. This is done individually as `caret` will not handle a variable of zero standard deviation.  
+    
+  First, I use `caret::nearZeroVar` to remove variables with "near zero variance.
+```{r}
+
+DV_nzv_list <-
+  DV_train_data %>%
+  map(~ preProcess(.x,
+                   # method = c("nzv", "corr", "center", "scale", "medianImpute"),
+                   method = "nzv"
+                   )
+      )
+
+DV_nzv_predict <-
+  map2(.x = DV_nzv_list,
+       .y = DV_train_data,
+       .f = function(a, b) {
+         predict(a, b)
+         }
+       )
+
+
+saveRDS(DV_nzv_predict,
+        paste0(wd,
+               "/Data/Interim/",
+               "DV_nzv_predict.Rds"
+               )
+        )
+
+# DV_nzv_predict <-
+#   readRDS(paste0(wd,
+#                  "/Data/Interim/",
+#                  "DV_nzv_predict.Rds"
+#                  )
+#           )
+
+
+message("before reduction")
+DV_train_data %>%
+  map(~ dim(.x)
+      )
+
+DV_train_data$`41140` %>%
+  glimpse()
+
+
+message("after near-zero variable reduction")
+DV_nzv_predict %>%
+  map(~ dim(.x)
+      )
+
+DV_nzv_predict$`41140` %>%
+  glimpse()
+
+
+rm(DV_nzv_list)
+
+```  
+
+
+  First, I use `caret::corr` to remove highly correlated variables.
+```{r}
+
+DV_corr_list <-
+  DV_nzv_predict %>%
+  map(~ preProcess(.x,
+                   # method = c("nzv", "corr", "center", "scale", "medianImpute"),
+                   method = "corr"
+                   )
+      )
+
+DV_corr_predict <-
+  map2(.x = DV_corr_list,
+       .y = DV_nzv_predict,
+       .f = function(a, b) {
+         predict(a, b)
+         }
+       )
+
+
+saveRDS(DV_corr_predict,
+        paste0(wd,
+               "/Data/Interim/",
+               "DV_corr_predict.Rds"
+               )
+        )
+
+# DV_corr_predict <-
+#   readRDS(paste0(wd,
+#                  "/Data/Interim/",
+#                  "DV_corr_predict.Rds"
+#                  )
+#           )
+
+
+message("before corr reduction")
+DV_nzv_predict %>%
+  map(~ dim(.x)
+      )
+
+DV_nzv_predict$`41140` %>%
+  glimpse()
+
+
+message("after corr variable reduction")
+DV_corr_predict %>%
+  map(~ dim(.x)
+      )
+
+DV_corr_predict$`41140` %>%
+  glimpse()
+
+
+rm(DV_corr_list)
+
+```  
+
+
+### Modeling Parameters  
+    
+  Modeling parameters used in multiple models.
+```{r}
+
+period_train <- round((365 * 1.5),
+                      digits = 0
+                      ) + 30 # 1.5 years + 30 days of data needed for LSTM Keras modeling
+
+period_test <- round((365 * 0.5),
+                     digits = 0
+                     ) + 30 # test on 0.5 years * 30 days of data (even though we just predict 14 days out) needed for LSTM Keras modeling
+
+skip_span <- 8 # gives 13 evenly distributed  splits
+
+```
+
+
