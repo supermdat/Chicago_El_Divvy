@@ -88,7 +88,7 @@ wd
 
 ## Modeling
 
-**NOTE: `DV_corr_predict` and `DV_nzv_predict` are the outputs produced in Step 02**
+**NOTE: `DV_corr_predict`, `DV_nzv_predict`, `func_custom_accuracy_metrics`, `period_train`, `period_test`, and `skip_span` are the outputs produced in Step 02**
 ```{r}
 
 DV_corr_predict <-
@@ -102,6 +102,34 @@ DV_nzv_predict <-
   readRDS(paste0(wd,
                  "/Data/Interim/",
                  "DV_nzv_predict.Rds"
+                 )
+          )
+
+func_custom_accuracy_metrics <-
+  readRDS(paste0(wd,
+                 "/Data/Interim/",
+                 "func_custom_accuracy_metrics.Rds"
+                 )
+          )
+
+period_train <-
+  readRDS(paste0(wd,
+                 "/Data/Interim/",
+                 "period_train.Rds"
+                 )
+          )
+
+period_test <-
+  readRDS(paste0(wd,
+                 "/Data/Interim/",
+                 "period_test.Rds"
+                 )
+          )
+
+skip_span <-
+  readRDS(paste0(wd,
+                 "/Data/Interim/",
+                 "skip_span.Rds"
                  )
           )
 
