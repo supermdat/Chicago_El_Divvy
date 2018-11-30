@@ -522,6 +522,48 @@ period_test <- round((365 * 0.5),
 
 skip_span <- 8 # gives 13 evenly distributed  splits
 
+
+saveRDS(period_train,
+        paste0(wd,
+               "/Data/Interim/",
+               "period_train.Rds"
+               )
+        )
+
+# period_train <-
+#   readRDS(paste0(wd,
+#                  "/Data/Interim/",
+#                  "period_train.Rds"
+#                  )
+#           )
+
+saveRDS(period_test,
+        paste0(wd,
+               "/Data/Interim/",
+               "period_test.Rds"
+               )
+        )
+
+# period_test <-
+#   readRDS(paste0(wd,
+#                  "/Data/Interim/",
+#                  "period_test.Rds"
+#                  )
+#           )
+
+saveRDS(skip_span,
+        paste0(wd,
+               "/Data/Interim/",
+               "skip_span.Rds"
+               )
+        )
+
+# skip_span <-
+#   readRDS(paste0(wd,
+#                  "/Data/Interim/",
+#                  "skip_span.Rds"
+#                  )
+#           )
 ```
 
 
