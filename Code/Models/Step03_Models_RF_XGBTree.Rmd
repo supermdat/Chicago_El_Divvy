@@ -1,0 +1,554 @@
+---
+title: "Step 03: Models - Random Forest and XGBoost"
+output:
+  html_document:
+    df_print: paged
+---
+  
+## Setup    
+  Load the relevant libraries.
+```{r, message=FALSE, warning=FALSE}
+
+# rm(list = ls())
+# .rs.restartR()
+
+
+# data manipulation
+library("plyr")
+library("tidyverse")
+library("magrittr")
+library("data.table")
+library("lubridate")
+library("sqldf")
+
+
+# time series specific packages
+library("timetk")
+library("zoo")
+library("tibbletime")
+
+
+# modeling
+library("fpp2")
+library("prophet")
+library("caret")
+library("randomForest")
+library("xgboost")
+library("h2o")
+library("keras")
+# use_session_with_seed(123456789) # setting the seed to obtain reproducible results
+# see https://keras.rstudio.com/articles/faq.html#how-can-i-obtain-reproducible-results-using-keras-during-development and https://cran.r-project.org/web/packages/keras/vignettes/faq.html
+# can also re-enable gpu and parallel processing by using:  use_session_with_seed(42, disable_gpu = FALSE, disable_parallel_cpu = FALSE)
+
+
+
+# other
+library("geosphere")          # specific for distance calculations from lat-lon pairs
+library("naniar")             # inspecting missing data
+library("rlang")              # building functions
+library("recipes")            # used in Keras modeling to design matrices
+library("rsample")            # rolling samples for validation stats
+library("tfruns")             # used in Keras modeling for trainin runs
+library("stringr")            # string manipulation
+library("ggplot2")            # viz
+library("sweep")              # more easily pull out model statistics
+library("yardstick")          # easily calculate accuracy stats
+library("doParallel")         # parallel processing
+
+```
+  
+    
+  Session Info.
+```{r}
+
+sessionInfo()
+
+```
+  
+    
+  Setup the root directory.
+```{r "setup", include = FALSE}
+
+require("knitr")
+
+opts_knit$set(root.dir = "/Users/mdturse/Desktop/Analytics/Chicago_El_Divvy/")
+
+```
+  
+    
+  Setting `wd` as the working directory.
+```{r}
+
+wd <- getwd()
+
+wd
+
+```
+
+
+## Modeling
+
+**NOTE: `DV_corr_predict` and `DV_nzv_predict` are the outputs produced in Step 02**
+```{r}
+
+DV_corr_predict <-
+  readRDS(paste0(wd,
+                 "/Data/Interim/",
+                 "DV_corr_predict.Rds"
+                 )
+          )
+
+DV_nzv_predict <-
+  readRDS(paste0(wd,
+                 "/Data/Interim/",
+                 "DV_nzv_predict.Rds"
+                 )
+          )
+
+```  
+
+
+### Random Forest  
+  
+ Create one model with preprocessing that removes highly correlated variables, and one model that does not.
+```{r}
+
+tot_cores <- detectCores()
+cl <- makeCluster(tot_cores - 1)
+registerDoParallel(cl)
+
+
+start <- proc.time()
+DV_Fit.Rf.corr_yes <-
+  DV_corr_predict %>%
+  map(.f = function(a) {
+    fitControl =
+      trainControl(method = "timeslice",
+                   initialWindow = period_train,
+                   horizon = period_test,
+                   fixedWindow = TRUE,
+                   skip = skip_span,
+                   summaryFunction = func_custom_accuracy_metrics
+                   )
+
+    set.seed(123456789)
+
+    output =
+      train(el_rides ~ .,
+            data = a %>% 
+              select(#-el_stop_id,
+                     -data_use_el_stop_id
+                     ),
+            preProcess = c(#"nzv"
+                           #"corr"
+                           "center",
+                           "scale",
+                           "medianImpute"
+                           ),
+            na.action = na.pass,
+            method = "rf",
+            metric = "RMSE",
+            maximize = FALSE,
+            importance = TRUE,
+            trControl = fitControl,
+            verbose = TRUE
+            )
+
+    return(output)
+    }
+    )
+
+time.Rf.corr_yes <- proc.time() - start
+
+message("DV_Fit.Rf.corr_yes")
+DV_Fit.Rf.corr_yes
+
+
+start <- proc.time()
+DV_Fit.Rf.corr_no <-
+  DV_nzv_predict %>%
+  map(.f = function(a) {
+    fitControl =
+      trainControl(method = "timeslice",
+                   initialWindow = period_train,
+                   horizon = period_test,
+                   fixedWindow = TRUE,
+                   skip = skip_span,
+                   summaryFunction = func_custom_accuracy_metrics
+                   )
+    
+    set.seed(123456789)
+    
+    output =
+      train(el_rides ~ .,
+            data = a %>% 
+              select(#-el_stop_id,
+                     -data_use_el_stop_id
+                     ),
+            preProcess = c(#"nzv"
+                           #"corr"
+                           "center",
+                           "scale",
+                           "medianImpute"
+                           ),
+            na.action = na.pass,
+            method = "rf",
+            metric = "RMSE",
+            maximize = FALSE,
+            importance = TRUE,
+            trControl = fitControl,
+            verbose = TRUE
+            )
+    
+    return(output)
+    }
+    )
+
+time.Rf.corr_no <- proc.time() - start
+
+message("DV_Fit.Rf.corr_no")
+DV_Fit.Rf.corr_no
+
+
+stopCluster(cl)
+rm(start, tot_cores, cl)
+
+```
+  
+    
+  Compare the results.
+```{r}
+
+# user  system elapsed 
+#  61.039   5.166 527.512 
+# ~ 9 min
+message("time.Rf.corr_yes")
+time.Rf.corr_yes
+
+# user  system elapsed 
+#  58.048   3.563 486.738
+# ~ 8 min
+message("time.Rf.corr_no")
+time.Rf.corr_no
+
+
+# Create a list of models
+Models.Rf <-
+  pmap(.l = list(a = DV_Fit.Rf.corr_yes,
+                 b = DV_Fit.Rf.corr_no
+                 ),
+       .f = function(a, b) {
+         l = list(Corr_No = a,
+                  Corr_Yes = b
+                  )
+         
+         return(l)
+         }
+       )
+
+
+# Resample the models
+Resample_Results.Rf <-
+  Models.Rf %>% 
+  map(~ resamples(.x)
+      )
+
+
+# Generate a summary
+Resample_Results.Rf %>% 
+  map(~ summary(.x)
+      )
+
+Resample_Results.Rf %>% 
+  map(~ bwplot(.x)
+      )
+
+```
+  
+    
+  After inspecting the results, we choose to keep the model that includes the correlation filter in the preprocessing stage - the results and runtimes were similar.
+```{r}
+
+rm(list = ls(pattern = "corr_yes"))
+
+
+saveRDS(DV_Fit.Rf.corr_no,
+        paste0(wd,
+               "/Models/",
+               "DV_Fit.Rf.corr_no.Rds"
+               )
+        )
+
+
+saveRDS(time.Rf.corr_no,
+        paste0(wd,
+               "/Models/",
+               "time.Rf.corr_no.Rds"
+               )
+        )
+
+
+# DV_Fit.Rf.corr_no <-
+#   readRDS(paste0(wd,
+#                  "/Models/",
+#                  "DV_Fit.Rf.corr_no.Rds"
+#                  )
+#           )
+
+# time.Rf.corr_no <-
+#   readRDS(paste0(wd,
+#                  "/Models/",
+#                  "time.Rf.corr_no.Rds"
+#                  )
+#           )
+
+```
+  
+    
+  Inspect varialbe importance.
+```{r}
+
+# Permutation improtance is used for the variable importance
+# Based on discussion here:  http://parrt.cs.usfca.edu/doc/rf-importance/index.html
+VI <- DV_Fit.Rf.corr_no %>% 
+  map(~ varImp(.x,
+               type = 1,
+               scale = TRUE
+               )
+      )
+
+VI
+
+
+VI %>% 
+  map(~ plot(.x, top = 20)
+      )
+
+
+rm(VI)
+
+```
+
+
+### Extreme Gradient Boosted Tree
+  
+ Create one model with preprocessing that removes highly correlated variables, and one model that does not.
+```{r}
+
+tot_cores <- detectCores()
+cl <- makeCluster(tot_cores - 1)
+registerDoParallel(cl)
+
+
+start <- proc.time()
+DV_Fit.Xgbtree.corr_yes <-
+  DV_corr_predict %>%
+  map(.f = function(a) {
+    fitControl =
+      trainControl(method = "timeslice",
+                   initialWindow = period_train,
+                   horizon = period_test,
+                   fixedWindow = TRUE,
+                   skip = skip_span,
+                   summaryFunction = func_custom_accuracy_metrics
+                   )
+
+    set.seed(123456789)
+
+    output =
+      train(el_rides ~ .,
+            data = a %>% 
+              select(#-el_stop_id,
+                     -data_use_el_stop_id
+                     ),
+            preProcess = c(#"nzv"
+                           #"corr"
+                           "center",
+                           "scale",
+                           "medianImpute"
+                           ),
+            na.action = na.pass,
+            method = "xgbTree",
+            metric = "RMSE",
+            maximize = FALSE,
+            importance = TRUE,
+            trControl = fitControl,
+            verbose = TRUE
+            )
+
+    return(output)
+    }
+    )
+
+time.Xgbtree.corr_yes <- proc.time() - start
+
+# message("DV_Fit.Xgbtree.corr_yes")
+# DV_Fit.Xgbtree.corr_yes
+
+
+
+start <- proc.time()
+DV_Fit.Xgbtree.corr_no <-
+  DV_nzv_predict %>%
+  map(.f = function(a) {
+    fitControl =
+      trainControl(method = "timeslice",
+                   initialWindow = period_train,
+                   horizon = period_test,
+                   fixedWindow = TRUE,
+                   skip = skip_span,
+                   summaryFunction = func_custom_accuracy_metrics
+                   )
+    
+    set.seed(123456789)
+    
+    output =
+      train(el_rides ~ .,
+            data = a %>% 
+              select(#-el_stop_id,
+                     -data_use_el_stop_id
+                     ),
+            preProcess = c(#"nzv"
+                           #"corr"
+                           "center",
+                           "scale",
+                           "medianImpute"
+                           ),
+            na.action = na.pass,
+            method = "xgbTree",
+            metric = "RMSE",
+            maximize = FALSE,
+            importance = TRUE,
+            trControl = fitControl,
+            verbose = TRUE
+            )
+    
+    return(output)
+    }
+    )
+
+time.Xgbtree.corr_no <- proc.time() - start
+
+# message("DV_Fit.Xgbtree.corr_no")
+# DV_Fit.Xgbtree.corr_no
+
+
+stopCluster(cl)
+rm(start, tot_cores, cl)
+
+```
+
+    
+  Compare the results.
+```{r}
+
+# user  system elapsed 
+#  10.888   2.333 179.411
+# ~ 3 min 
+message("time.Xgbtree.corr_yes")
+time.Xgbtree.corr_yes
+
+# user  system elapsed 
+#  10.377   2.360 201.333
+# ~ 3 min
+message("time.Xgbtree.corr_no")
+time.Xgbtree.corr_no
+
+
+# Create a list of models
+Models.Xgbtree <-
+  pmap(.l = list(a = DV_Fit.Xgbtree.corr_yes,
+                 b = DV_Fit.Xgbtree.corr_no
+                 ),
+       .f = function(a, b) {
+         l = list(Corr_No = a,
+                  Corr_Yes = b
+                  )
+         
+         return(l)
+         }
+       )
+
+
+# Resample the models
+Resample_Results.Xgbtree <-
+  Models.Xgbtree %>% 
+  map(~ resamples(.x)
+      )
+
+
+# Generate a summary
+Resample_Results.Xgbtree %>% 
+  map(~ summary(.x)
+      )
+
+Resample_Results.Xgbtree %>% 
+  map(~ bwplot(.x)
+      )
+
+```
+  
+    
+  After inspecting the results, we choose to keep the model that does NOT include the correlation filter in the preprocessing stage - the results were similar, and the run time was about half as long.
+```{r}
+
+rm(list = ls(pattern = "Xgbtree.corr_no"))
+
+
+saveRDS(DV_Fit.Xgbtree.corr_yes,
+        paste0(wd,
+               "/Models/",
+               "DV_Fit.Xgbtree.corr_yes.Rds"
+               )
+        )
+
+
+saveRDS(time.Xgbtree.corr_yes,
+        paste0(wd,
+               "/Models/",
+               "time.Xgbtree.corr_yes.Rds"
+               )
+        )
+
+# DV_Fit.Xgbtree.corr_yes <-
+#   readRDS(paste0(wd,
+#                  "/Models/",
+#                  "DV_Fit.Xgbtree.corr_yes.Rds"
+#                  )
+#           )
+
+# time.Xgbtree.corr_yes <-
+#   readRDS(paste0(wd,
+#                  "/Models/",
+#                  "time.Xgbtree.corr_yes.Rds"
+#                  )
+#           )
+
+```
+  
+    
+  Inspect varialbe importance.
+```{r}
+
+# Permutation improtance is used for the variable importance
+# Based on discussion here:  http://parrt.cs.usfca.edu/doc/rf-importance/index.html
+VI <- DV_Fit.Xgbtree.corr_yes %>% 
+  map(~ varImp(.x,
+               type = 1,
+               scale = TRUE
+               )
+      )
+
+VI
+
+
+VI %>% 
+  map(~ plot(.x, top = 20)
+      )
+
+
+rm(VI)
+
+```
+
+
