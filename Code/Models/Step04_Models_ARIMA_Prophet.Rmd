@@ -88,7 +88,7 @@ wd
 
 ## Modeling
 
-**NOTE: `period_train`, `period_test`, `skip_span`, `train_data`, and `DV__nzv_predict_train_data` are the outputs produced in Step 02**
+**NOTE: `period_train`, `period_test`, `skip_span`, `train_data`, `DV_train_data`, and `add_trn_val_test`, `time.Rf.corr_no`, and `time.Xgbtree.corr_yes` are the outputs produced in Step 02 and Step 03**
 ```{r}
 
 period_train <-
@@ -123,6 +123,13 @@ DV_train_data <-
   readRDS(paste0(wd,
                  "/Models/",
                  "DV_train_data.Rds"
+                 )
+          )
+
+add_trn_val_test <-
+  readRDS(paste0(wd,
+                 "/Data/Interim/",
+                 "add_trn_val_test.Rds"
                  )
           )
 
