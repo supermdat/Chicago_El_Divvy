@@ -383,6 +383,35 @@ DV_train_data <-
       )
 
 
+saveRDS(train_data,
+        paste0(wd,
+               "/Models/",
+               "train_data.Rds"
+               )
+        )
+
+# train_data <-
+#   readRDS(paste0(wd,
+#                  "/Models/",
+#                  "train_data.Rds"
+#                  )
+#           )
+
+saveRDS(DV_train_data,
+        paste0(wd,
+               "/Models/",
+               "DV_train_data.Rds"
+               )
+        )
+
+# DV_train_data <-
+#   readRDS(paste0(wd,
+#                  "/Models/",
+#                  "DV_train_data.Rds"
+#                  )
+#           )
+
+
 message("train_data")
 train_data %>% 
   map(~ dim(.x)
