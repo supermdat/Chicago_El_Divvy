@@ -349,11 +349,11 @@ func_custom_accuracy_metrics <-
 
 saveRDS(func_custom_accuracy_metrics,
         paste0(wd,
+               "/Data/Interim/",
                "/Models/",
                "func_custom_accuracy_metrics.Rds"
                )
         )
-
 
 # func_custom_accuracy_metrics <-
 #   readRDS(paste0(wd,
@@ -382,6 +382,35 @@ DV_train_data <-
                data_use_el_stop_id == "01_train"
                )
       )
+
+
+saveRDS(train_data,
+        paste0(wd,
+               "/Models/",
+               "train_data.Rds"
+               )
+        )
+
+# train_data <-
+#   readRDS(paste0(wd,
+#                  "/Models/",
+#                  "train_data.Rds"
+#                  )
+#           )
+
+saveRDS(DV_train_data,
+        paste0(wd,
+               "/Models/",
+               "DV_train_data.Rds"
+               )
+        )
+
+# DV_train_data <-
+#   readRDS(paste0(wd,
+#                  "/Models/",
+#                  "DV_train_data.Rds"
+#                  )
+#           )
 
 
 message("train_data")
