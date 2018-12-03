@@ -1,0 +1,766 @@
+---
+title: "Step 04: Models - ARIMA and Prophet"
+output:
+  html_document:
+    df_print: paged
+---
+  
+## Setup    
+  Load the relevant libraries.
+```{r, message=FALSE, warning=FALSE}
+
+# rm(list = ls())
+# .rs.restartR()
+
+
+# data manipulation
+library("plyr")
+library("tidyverse")
+library("magrittr")
+library("data.table")
+library("lubridate")
+library("sqldf")
+
+
+# time series specific packages
+library("timetk")
+library("zoo")
+library("tibbletime")
+
+
+# modeling
+library("fpp2")
+library("prophet")
+library("caret")
+library("randomForest")
+library("xgboost")
+library("h2o")
+library("keras")
+# use_session_with_seed(123456789) # setting the seed to obtain reproducible results
+# see https://keras.rstudio.com/articles/faq.html#how-can-i-obtain-reproducible-results-using-keras-during-development and https://cran.r-project.org/web/packages/keras/vignettes/faq.html
+# can also re-enable gpu and parallel processing by using:  use_session_with_seed(42, disable_gpu = FALSE, disable_parallel_cpu = FALSE)
+
+
+
+# other
+library("geosphere")          # specific for distance calculations from lat-lon pairs
+library("naniar")             # inspecting missing data
+library("rlang")              # building functions
+library("recipes")            # used in Keras modeling to design matrices
+library("rsample")            # rolling samples for validation stats
+library("tfruns")             # used in Keras modeling for trainin runs
+library("stringr")            # string manipulation
+library("ggplot2")            # viz
+library("sweep")              # more easily pull out model statistics
+library("yardstick")          # easily calculate accuracy stats
+library("doParallel")         # parallel processing
+
+```
+  
+    
+  Session Info.
+```{r}
+
+sessionInfo()
+
+```
+  
+    
+  Setup the root directory.
+```{r "setup", include = FALSE}
+
+require("knitr")
+
+opts_knit$set(root.dir = "/Users/mdturse/Desktop/Analytics/Chicago_El_Divvy/")
+
+```
+  
+    
+  Setting `wd` as the working directory.
+```{r}
+
+wd <- getwd()
+
+wd
+
+```
+
+
+## Modeling
+
+**NOTE: `train_data`, and `DV__nzv_predict_train_data` are the outputs produced in Step 02**
+```{r}
+
+train_data <-
+  readRDS(paste0(wd,
+                 "/Models/",
+                 "train_data.Rds"
+                 )
+          )
+
+DV_train_data <-
+  readRDS(paste0(wd,
+                 "/Models/",
+                 "DV_train_data.Rds"
+                 )
+          )
+
+time.Rf.corr_no <-
+  readRDS(paste0(wd,
+                 "/Models/",
+                 "time.Rf.corr_no.Rds"
+                 )
+          )
+
+time.Xgbtree.corr_yes <-
+  readRDS(paste0(wd,
+                 "/Models/",
+                 "time.Xgbtree.corr_yes.Rds"
+                 )
+          )
+
+```  
+
+
+### Setup for Models Not in `caret` 
+  
+  This is based on the example shown [here](https://topepo.github.io/rsample/articles/Applications/Time_Series.html), and is needed for the time-series-ish models, which are not currently part of the `caret` modeling process.
+    
+  Create the rolling-origin resamples to be used for measuring forecast accuracy. Rolling samples will use 2 years of data do predict the next 14 days.  
+```{r}
+
+roll_rs <-
+  # DV_train_data %>% 
+  train_data %>% 
+  map(~ rolling_origin(.x,
+                       initial = period_train,
+                       assess = period_test,
+                       cumulative = FALSE,
+                       skip = skip_span
+                       )
+      )
+
+
+message("DV_train_data")
+DV_train_data %>% 
+  map(~ nrow(.x)
+      )
+
+message("roll_rs")
+roll_rs %>% 
+  map(~ nrow(.x)
+      )
+
+
+names(roll_rs$`40600`)
+roll_rs %>% 
+  map(~ length(.x$splits)
+      )
+
+# roll_rs$`40600`$splits[[1]]
+# train_data %>% 
+#   map(~ summarise(.x,
+#                   min_d = min(el_date),
+#                   max_d = max(el_date),
+#                   days = n()
+#                   )
+#       )
+
+# rm(period_train, period_test, skip_span)
+
+```
+  
+    
+  For plotting, let’s index each split by the first day of the assessment set.
+```{r}
+
+get_date <-
+  function(x)
+    min(assessment(x)$el_date
+        )
+
+
+roll_rs <-
+  pmap(.l = list(a = roll_rs),
+       .f = function(a) {
+         data = a
+         
+         splits = data$splits %>% 
+           map(get_date)
+         
+         data$start_date = do.call("c", splits)
+         
+         return(data)
+         }
+       )
+
+names(roll_rs$`40600`)
+length(roll_rs$`40600`$start_date)
+head(roll_rs$`40600`$start_date, 20)
+
+
+rm(get_date)
+
+```
+
+
+
+### Model Setup (`forecast::auto.arima` and `prophet::prophet`)
+      
+  Here, we use `forecast::auto.arima` to produce create an arima model. We also try `prophet::prophet` to create a model based on trend, seasonality, and holidays, and that is a bit like a general additive model. More info can be found [here](https://facebook.github.io/prophet/) and [here](https://peerj.com/preprints/3190/).  
+    
+  First, I create the function for the basic ARIMA model.
+```{r}
+
+fit_model_arima <-
+  function(x, ...) {
+    data = x %>% 
+      analysis() %>% 
+      # Since the first day changes over resamples, adjust it based on the first date value in the data frame
+      tk_ts(select = el_rides,
+            start = .$el_date[[1]] %>% lubridate::year(),
+            freq = 7,
+            silent = TRUE
+            )
+    
+    fit = auto.arima(data, ...)
+    
+    return(fit)
+    }
+
+```
+  
+    
+  Next I create the function to run an ARIMA model with external regressors (external regressors include fourier transformations, and other regressors identified by using the random forest and xgboost models used above).
+```{r}
+
+fit_model_arima_xreg <-
+  function(x, ...) {
+    data = 
+      x %>% 
+      analysis() %>% 
+      mutate(holiday_binary = if_else(holiday == FALSE,
+                                      0,
+                                      1
+                                      )
+             )
+    
+    # weekly frequency
+    ts_7 =
+      data %>% 
+      tk_ts(select = el_rides,
+            start = .$el_date[[1]] %>% lubridate::year(),
+            freq = 7,
+            silent = TRUE
+            )
+    
+    # yearly frequency
+    ts_365 =
+      data %>% 
+      tk_ts(select = el_rides,
+            start = .$el_date[[1]] %>% lubridate::year(),
+            # freq = 365.25,
+            freq = 365,
+            silent = TRUE
+            )
+    
+    # use a fourier transformation to capture daily seasonality and choose K programatically
+    bestfit = list(aicc = Inf)
+    for(K in seq(7)
+        ) {
+      n = nrow(assessment(x)
+               )
+      
+      ts_365_fourier = fourier(ts_365,
+                               K = K
+                               )
+      
+      ts_365_fourier_future = fourier(ts_365,
+                                      K = K,
+                                      h = n
+                                      )
+      
+      fit = auto.arima(ts_7,
+                       xreg = cbind(ts_365_fourier,
+                                    data$holiday_binary,
+                                    data$year,
+                                    data$half,
+                                    data$quarter,
+                                    data$month,
+                                    data$mweek,
+                                    data$wday.lbl,
+                                    data$el_rides_l07,
+                                    data$el_rides_l14,
+                                    data$el_rides_l21,
+                                    data$el_rides_l28,
+                                    data$el_rides_ma07,
+                                    data$el_rides_ma14,
+                                    data$el_rides_ma21,
+                                    data$el_rides_ma28
+                                    )#,
+                       # seasonal = FALSE
+                       )
+      
+      if(fit[["aicc"]] < bestfit[["aicc"]]) {
+        bestfit = fit
+        bestK = K
+        bestts_365_fourier_future = ts_365_fourier_future
+      }
+      
+      return(list(best_fit = bestfit,
+                  best_k = bestK,
+                  best_ts_365_fourier_future = bestts_365_fourier_future
+                  )
+             )
+    }
+    
+    return()
+    }
+
+```
+  
+    
+  Now I create the function to run the basic prophet model (based just on `el_rides`.
+```{r}
+
+# prophet
+fit_model_prophet <-
+  function(x, ...) {
+    x %>% 
+      analysis() %>% 
+      select(el_date,
+             el_rides
+             ) %>% 
+      rename(ds = el_date,
+             y = el_rides
+             ) %>% 
+      prophet(...)
+  }
+
+```
+
+
+### Run Models
+
+#### Arima-Based Model  
+  **Need to review this:**  [http://www.business-science.io/code-tools/2018/04/08/introducing-anomalize.html](http://www.business-science.io/code-tools/2018/04/08/introducing-anomalize.html) for anomaly detection.
+    
+  Can also use any other modeling methods (e.g., prophet), and then use the outlier detection method twitter used (Generalized ESD) on the remainder. **See:**  [https://www.rdocumentation.org/packages/EnvStats/versions/2.3.0/topics/rosnerTest](https://www.rdocumentation.org/packages/EnvStats/versions/2.3.0/topics/rosnerTest) for the algorithm used outside of `AnomalyDetection::AnomalyDetectionTs`.  
+    
+  Here I run the basic `forecast::auto.arima` model.
+```{r}
+
+# user   system  elapsed 
+# 1001.467   21.414 1036.904
+# ~ 17 min
+message("arima")
+start <- proc.time()
+models <-
+  pmap(.l = list(a = roll_rs),
+       .f = function(a) {
+         
+         splits_a = a$splits %>%
+           map(fit_model_arima)
+         
+         a$arima = splits_a
+         
+         return(a)
+         }
+       )
+
+time.arima <- proc.time() - start
+time.arima
+
+```
+  
+    
+  Here I run the `forecast::auto.arima` model with external regressors.
+```{r}
+ 
+# user  system elapsed 
+# 626.467  26.937 673.471
+# ~ 11 min
+message("arima_xreg")
+start <- proc.time()
+models <-
+  pmap(.l = list(a = models),
+       .f = function(a) {
+         
+         splits_a_xreg = a$splits %>% 
+           map(fit_model_arima_xreg)
+         
+         a$arima_xreg = splits_a_xreg
+         
+         return(a)
+         }
+       )
+
+time.arima_xreg <- proc.time() - start
+time.arima_xreg
+
+```
+  
+    
+  Here I run the basic `prophet::prophet` model
+```{r}
+
+# user  system elapsed 
+#  12.007   1.344  13.901
+message("prophet")
+start <- proc.time()
+models <-
+  pmap(.l = list(a = models),
+       .f = function(a) {
+         
+         splits_p = a$splits %>%
+           map(~ fit_model_prophet(.x,
+                                   
+                                   )
+               )
+         
+         a$prophet = splits_p
+         
+         return(a)
+         }
+       )
+
+time.prophet <- proc.time() - start
+time.prophet
+
+```
+  
+    
+  Here I run the `prophet::prophet` model that includes regressors for holidays.
+```{r}
+
+# create the holiday_dates
+holiday_dates <-
+  add_trn_val_test %>% 
+  map(~ select(.x,
+               holiday_name,
+               el_date
+               ) %>% 
+        filter(holiday_name != "--Not_Holiday--") %>% 
+        rename(holiday = holiday_name,
+               ds = el_date
+               )
+      )
+
+holiday_dates <- bind_rows(holiday_dates) %>% 
+  select(holiday,
+         ds
+         ) %>% 
+  distinct() %>% 
+  arrange(ds)
+
+
+# user  system elapsed 
+#  35.327   3.401  47.577
+message("prophet_hol")
+start <- proc.time()
+models <-
+  pmap(.l = list(a = models),
+       .f = function(a) {
+         
+         splits_p_hol = a$splits %>%
+           map(~ fit_model_prophet(.x,
+                                   holidays = holiday_dates
+                                   )
+               )
+           
+         a$prophet_hol <- splits_p_hol
+         
+         return(a)
+         }
+       )
+
+time.prophet_hol <- proc.time() - start
+time.prophet_hol
+
+
+# rm(holiday_dates)
+
+```
+
+
+
+```{r}
+
+run_times <- list(arima = as.list(time.arima),
+                  arima_xreg = as.list(time.arima_xreg),
+                  prophet = as.list(time.prophet),
+                  prophet_hol = as.list(time.prophet_hol)
+                  )
+
+run_times
+
+
+# saving is done to avoid having to run the models again
+saveRDS(models,
+        paste0(wd,
+               "/Models/",
+               "models.Rds"
+               )
+        )
+
+# models <-
+#   readRDS(paste0(wd,
+#                  "/Data_Processed/",
+#                  "models.Rds"
+#                  )
+#           )
+
+```
+  
+    
+  Create the `Prophet` forecasts and plots - these will be used for measuring model accuracy (below). Here I creat the future prophet dataset.
+```{r}
+
+# Dataframe for future dates
+prophet.future <-
+  pmap(.l = list(a = models),
+       .f = function(a) {
+         splits_p_future =
+           a$prophet %>% 
+           map(make_future_dataframe,
+               periods = 365
+               )
+         
+         splits_p_hol_future =
+           a$prophet_hol %>% 
+           map(make_future_dataframe,
+               periods = 365
+               )
+         
+         a$prophet.future <- splits_p_future
+         a$prophet_hol.future <- splits_p_hol_future
+         
+         return(a)
+         }
+       )
+
+length(prophet.future$`40600`$prophet.future)
+length(prophet.future$`40600`$prophet_hol.future)
+
+```  
+  
+    
+  And now I can create the prohpet forecasts. First, the basic prophet forecast.
+```{r}
+
+# user  system elapsed 
+# 220.704  21.132 242.524
+# ~ 4 min
+start <- proc.time()
+prophet.forecast <-
+  pmap(.l = list(a = prophet.future),
+       .f = function(a) {
+         splits_p_m =
+           a$prophet
+         
+         splits_p_future =
+           a$prophet.future
+         
+         splits_p_forecast =
+           pmap(.l = list(b = splits_p_m,
+                          c = splits_p_future
+                          ),
+                .f = function(b, c) {
+                  predict(b, c) %>% 
+                    # if_else is needed to prevent any negative predictions
+                    mutate(yhat_zero_floor = if_else(yhat < 0,
+                                                     0,
+                                                     yhat
+                                                     )
+                           )
+                  }
+                )
+         
+         a$prophet.forecast = splits_p_forecast
+         
+         return(a)
+         }
+       )
+
+time.prophet.forecast <- proc.time() - start
+time.prophet.forecast
+
+```
+  
+    
+  And now the prophet forecast including holidays.
+```{r}
+
+# user  system elapsed 
+# 792.629  78.698 881.271
+# ~ 15 min
+start <- proc.time()
+prophet.forecast <-
+  pmap(.l = list(a = prophet.forecast),
+       .f = function(a) {
+         splits_p_hol_m =
+           a$prophet_hol
+         
+         splits_p_hol_future =
+           a$prophet_hol.future
+         
+         splits_p_hol_forecast =
+           pmap(.l = list(b = splits_p_hol_m,
+                          c = splits_p_hol_future
+                          ),
+                .f = function(b, c) {
+                  predict(b, c) %>% 
+                    # if_else is needed to prevent any negative predictions
+                    mutate(yhat_zero_floor = if_else(yhat < 0,
+                                                     0,
+                                                     yhat
+                                                     )
+                           )
+                  }
+                )
+         
+         a$prophet_hol.forecast = splits_p_hol_forecast
+         
+         return(a)
+         }
+       )
+
+time.prophet_hol.forecast <- proc.time() - start
+time.prophet_hol.forecast
+
+```
+  
+    
+  Now I simply update the `run_times` dataset with the relevant prophet info, and the relvant info from the random forest and xgboost models.
+```{r}
+
+
+run_times[5:6] <-
+  list(prophet.forecast = as.list(time.prophet.forecast),
+       prophet_hol.forecast = as.list(time.prophet_hol.forecast)
+       )
+
+names(run_times)[5:6] <- c("prophet.forecast", "prophet_hol.forecast")
+
+run_times[7:8] <-
+  list(rf_corr_no = as.list(time.Rf.corr_no),
+       xgbtree_corr_yes = as.list(time.Xgbtree.corr_yes)
+       )
+  
+names(run_times)[7:8] <- c("rf_corr_no", "xgbtree_corr_yes")
+
+
+str(run_times)
+
+
+# saving is done to avoid having to run the forecasts again
+saveRDS(run_times,
+        paste0(wd,
+               "/Models/",
+               "run_times.Rds"
+               )
+        )
+
+# run_times <-
+#   readRDS(paste0(wd,
+#                  "/Models/",
+#                  "run_times.Rds"
+#                  )
+#           )
+
+
+rm(time.Rf.corr_no, time.Xgbtree.corr_yes)
+
+```
+  
+    
+  And now I can create the prophet plots.
+```{r}
+
+prophet.plots <-
+  pmap(.l = list(a = prophet.forecast),
+       .f = function(a) {
+         splits_p_m =
+           a$prophet
+         
+         splits_p_hol_m =
+           a$prophet_hol
+         
+         splits_p_forecast =
+           a$prophet.forecast
+         
+         splits_p_hol_forecast =
+           a$prophet_hol.forecast
+         
+         
+         splits_p_plots =
+           pmap(.l = list(b = splits_p_m,
+                          c = splits_p_forecast
+                          ),
+                .f = function(b, c) {
+                  plot(b, c)
+                  }
+                )
+         
+         splits_p_hol_plots =
+           pmap(.l = list(b = splits_p_hol_m,
+                          c = splits_p_hol_forecast
+                          ),
+                .f = function(b, c) {
+                  plot(b, c)
+                  }
+                )
+         
+         
+         a$prophet.plots <- splits_p_plots
+         a$prophet_hol.plots <- splits_p_hol_plots
+         
+         return(a)
+         }
+       )
+
+# saving is done to avoid having to run the forecasts again
+saveRDS(prophet.plots,
+        paste0(wd,
+               "/Models/",
+               "prophet.plots.Rds"
+               )
+        )
+
+# prophet.plots <-
+#   readRDS(paste0(wd,
+#                  "/Models/",
+#                  "prophet.plots.Rds"
+#                  )
+#           )
+
+
+names(prophet.plots)
+names(prophet.plots$`40600`)
+length(prophet.plots$`40600`$prophet.plots)
+length(prophet.plots$`40600`$prophet_hol.plots)
+
+message("prophet")
+pmap(.l = list(a = prophet.plots
+               ),
+     .f = function(a, b) {
+       dat = a
+       
+       dat$prophet.plots[[10]]
+       }
+     )
+
+message("prophet_hol")
+pmap(.l = list(a = prophet.plots
+               ),
+     .f = function(a, b) {
+       dat = a
+       
+       dat$prophet_hol.plots[[10]]
+       
+       }
+     )
+
+```
+
+
