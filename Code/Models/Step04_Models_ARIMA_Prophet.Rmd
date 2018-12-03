@@ -88,8 +88,29 @@ wd
 
 ## Modeling
 
-**NOTE: `train_data`, and `DV__nzv_predict_train_data` are the outputs produced in Step 02**
+**NOTE: `period_train`, `period_test`, `skip_span`, `train_data`, and `DV__nzv_predict_train_data` are the outputs produced in Step 02**
 ```{r}
+
+period_train <-
+  readRDS(paste0(wd,
+                 "/Data/Interim/",
+                 "period_train.Rds"
+                 )
+          )
+
+period_test <-
+  readRDS(paste0(wd,
+                 "/Data/Interim/",
+                 "period_test.Rds"
+                 )
+          )
+
+skip_span <-
+  readRDS(paste0(wd,
+                 "/Data/Interim/",
+                 "skip_span.Rds"
+                 )
+          )
 
 train_data <-
   readRDS(paste0(wd,
