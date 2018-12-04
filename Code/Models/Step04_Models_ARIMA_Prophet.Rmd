@@ -310,6 +310,7 @@ fit_model_arima_xreg <-
       
       fit = auto.arima(ts_7,
                        xreg = cbind(ts_365_fourier,
+                                    # additional variables identified as "important" with Random Forest and XGBTree models
                                     data$holiday_binary,
                                     data$year,
                                     data$half,
