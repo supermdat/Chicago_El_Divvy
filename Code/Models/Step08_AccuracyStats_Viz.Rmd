@@ -1,0 +1,241 @@
+---
+title: "Step 08: Viz of Accuracy Stats"
+output:
+  html_document:
+    df_print: paged
+---
+  
+## Setup    
+  Load the relevant libraries.
+```{r, message=FALSE, warning=FALSE}
+
+# rm(list = ls())
+# .rs.restartR()
+
+
+# data manipulation
+library("plyr")
+library("tidyverse")
+library("magrittr")
+library("data.table")
+library("lubridate")
+library("sqldf")
+
+
+# time series specific packages
+library("timetk")
+library("zoo")
+library("tibbletime")
+
+
+# modeling
+library("fpp2")
+library("prophet")
+library("caret")
+library("randomForest")
+library("xgboost")
+library("h2o")
+library("keras")
+# use_session_with_seed(123456789) # setting the seed to obtain reproducible results
+# see https://keras.rstudio.com/articles/faq.html#how-can-i-obtain-reproducible-results-using-keras-during-development and https://cran.r-project.org/web/packages/keras/vignettes/faq.html
+# can also re-enable gpu and parallel processing by using:  use_session_with_seed(42, disable_gpu = FALSE, disable_parallel_cpu = FALSE)
+
+
+
+# other
+library("geosphere")          # specific for distance calculations from lat-lon pairs
+library("naniar")             # inspecting missing data
+library("rlang")              # building functions
+library("recipes")            # used in Keras modeling to design matrices
+library("rsample")            # rolling samples for validation stats
+library("tfruns")             # used in Keras modeling for trainin runs
+library("stringr")            # string manipulation
+library("ggplot2")            # viz
+library("sweep")              # more easily pull out model statistics
+library("yardstick")          # easily calculate accuracy stats
+library("doParallel")         # parallel processing
+
+```
+  
+    
+  Session Info.
+```{r}
+
+sessionInfo()
+
+```
+  
+    
+  Setup the root directory.
+```{r "setup", include = FALSE}
+
+require("knitr")
+
+opts_knit$set(root.dir = "/Users/mdturse/Desktop/Analytics/Chicago_El_Divvy/")
+
+```
+  
+    
+  Setting `wd` as the working directory.
+```{r}
+
+wd <- getwd()
+
+wd
+
+```
+
+
+## Visualize the Accuracy Measures 
+
+**NOTE: `all_split_rmse_mape` the output produced in Step 07**
+```{r}
+
+all_split_rmse_mape <-
+  readRDS(paste0(wd,
+                 "/Models/",
+                 "all_split_rmse_mape.Rds"
+                 )
+          )
+
+```  
+  
+    
+  Plot interpolation and extrapolation over time, by model.
+```{r}
+
+plot_interp_extrap <-
+  all_split_rmse_mape %>% 
+  map(~ select(.x,
+               arima.interpolation,
+               arima.extrapolation,
+               arima_xreg.interpolation,
+               arima_xreg.extrapolation,
+               prophet.interpolation,
+               prophet.extrapolation,
+               prophet_hol.interpolation,
+               prophet_hol.extrapolation,
+               rf.interpolation,
+               rf.extrapolation,
+               xgb.interpolation,
+               xgb.extrapolation,
+               h2o.interpolation,
+               h2o.extrapolation,
+               h2o.limvars.interpolation,
+               h2o.limvars.extrapolation,
+               keras.interpolation_rmse,
+               keras.extrapolation_rmse,
+               start_date,
+               el_stop_id
+               ) %>%
+        as.data.frame %>% 
+        rename(h2o_limvars.interpolation = h2o.limvars.interpolation,
+               h2o_limvars.extrapolation = h2o.limvars.extrapolation,
+               keras.interpolation = keras.interpolation_rmse,
+               keras.extrapolation = keras.extrapolation_rmse
+               ) %>% 
+        gather(error, RMSE, -start_date, -el_stop_id) %>% 
+        separate(error,
+                 c("model", "type"),
+                 sep = "\\.",
+                 remove = FALSE
+                 ) %>% 
+        ggplot(aes(x = start_date,
+                   y = RMSE,
+                   # col = error
+                   color = model
+                   )
+               ) +
+        facet_wrap(~ type,
+                   scales = "free"
+                   ) +
+        geom_point() +
+        geom_line() +
+        ggtitle(label = .$el_stop_id#,
+                # subtitle = "ARIMA-based model"
+                ) +
+        theme_bw() +
+        theme(legend.position = "bottom")
+      )
+
+plot_interp_extrap
+
+```
+  
+    
+  For each `el_stop_id`, plot the median RMSE for each model. First I munge the data.
+```{r}
+
+median_RMSE_by_model <-
+  pmap(.l = list(a = all_split_rmse_mape),
+       .f = function(a) {
+         med.arima = median(a$arima.extrapolation)
+         med.arima_xreg = median(a$arima_xreg.extrapolation)
+         med.prophet = median(a$prophet.extrapolation)
+         med.prophet_hol = median(a$prophet_hol.extrapolation)
+         med.rf = median(a$rf.extrapolation)
+         med.xgb = median(a$xgb.extrapolation)
+         med.h2o = median(a$h2o.extrapolation)
+         med.h2o_limvars = median(a$h2o.limvars.extrapolation)
+         med.keras = median(a$keras.extrapolation_rmse)
+         
+         med_extrap_all_models =
+           data.frame(el_stop_id = unique(a$el_stop_id),
+                      arima = med.arima,
+                      arima_xreg = med.arima_xreg,
+                      prophet = med.prophet,
+                      prophet_hol = med.prophet_hol,
+                      rf = med.rf,
+                      xgb = med.xgb,
+                      h2o = med.h2o,
+                      h2o_limvars = med.h2o_limvars,
+                      keras = med.keras
+                      )
+         
+         return(med_extrap_all_models)
+         }
+       ) %>% 
+  bind_rows()
+
+
+# View(median_RMSE_by_model)
+
+```
+  
+    
+  Now I create the plot itself.
+```{r}
+
+median_RMSE_by_model %>% 
+  gather(key = "model",
+         value = "RMSE_med",
+         -el_stop_id
+         ) %>% 
+  ggplot(aes(x = model,
+             y = RMSE_med,
+             fill = model
+             )
+         ) +
+  geom_col() +
+  geom_text(aes(label = format(round(RMSE_med, 1),
+                               1
+                               )
+                ),
+            size = 3,
+            hjust = 1
+            ) +
+  facet_wrap(~ el_stop_id,
+             ncol = 2,
+             scales = "free"
+             ) +
+  coord_flip() +
+  theme_bw() +
+  theme(legend.position = "none") +
+  NULL
+
+
+rm(median_RMSE_by_model)
+
+```
+
+
