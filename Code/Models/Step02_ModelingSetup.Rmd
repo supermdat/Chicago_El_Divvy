@@ -363,13 +363,14 @@ func_custom_accuracy_metrics <-
 saveRDS(func_custom_accuracy_metrics,
         paste0(wd,
                "/Data/Interim/",
+               "/Models/",
                "func_custom_accuracy_metrics.Rds"
                )
         )
 
 # func_custom_accuracy_metrics <-
 #   readRDS(paste0(wd,
-#                  "/Data/Interim/",
+#                  "/Models/",
 #                  "func_custom_accuracy_metrics.Rds"
 #                  )
 #           )
