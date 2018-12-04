@@ -272,6 +272,21 @@ func_one_hot_vars <-
     }
 
 
+saveRDS(func_one_hot_vars,
+        paste0(wd,
+               "/Data/Interim/",
+               "func_one_hot_vars.Rds"
+               )
+        )
+
+# func_one_hot_vars <-
+#   readRDS(paste0(wd,
+#                  "/Data/Interim/",
+#                  "func_one_hot_vars.Rds"
+#                  )
+#           )
+
+
 # run the function
 DV_data <-
   add_trn_val_test %>% 
@@ -360,6 +375,7 @@ saveRDS(func_custom_accuracy_metrics,
 #                  "func_custom_accuracy_metrics.Rds"
 #                  )
 #           )
+
 ```
 
 
