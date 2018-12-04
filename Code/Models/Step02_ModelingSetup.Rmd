@@ -209,7 +209,6 @@ rm(remove_first_28na_rows, func_train_test_indicator)
 
 
   **To Delete (below) when no longer needed**
-  
 ```{r}
 
 # add_trn_val_test <-
@@ -223,7 +222,6 @@ rm(remove_first_28na_rows, func_train_test_indicator)
 # str(add_trn_val_test$`41140`)
 
 ```
-
   **To Delete (above) when no longer needed**
 
 
@@ -270,6 +268,21 @@ func_one_hot_vars <-
                   as.data.frame()
                 )
     }
+
+
+saveRDS(func_one_hot_vars,
+        paste0(wd,
+               "/Data/Interim/",
+               "func_one_hot_vars.Rds"
+               )
+        )
+
+# func_one_hot_vars <-
+#   readRDS(paste0(wd,
+#                  "/Data/Interim/",
+#                  "func_one_hot_vars.Rds"
+#                  )
+#           )
 
 
 # run the function
@@ -361,6 +374,7 @@ saveRDS(func_custom_accuracy_metrics,
 #                  "func_custom_accuracy_metrics.Rds"
 #                  )
 #           )
+
 ```
 
 
