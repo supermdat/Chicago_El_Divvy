@@ -1,0 +1,982 @@
+---
+title: "Step 06: Models - Accuracy Stats"
+output:
+  html_document:
+    df_print: paged
+---
+  
+## Setup    
+  Load the relevant libraries.
+```{r, message=FALSE, warning=FALSE}
+
+# rm(list = ls())
+# .rs.restartR()
+
+
+# data manipulation
+library("plyr")
+library("tidyverse")
+library("magrittr")
+library("data.table")
+library("lubridate")
+library("sqldf")
+
+
+# time series specific packages
+library("timetk")
+library("zoo")
+library("tibbletime")
+
+
+# modeling
+library("fpp2")
+library("prophet")
+library("caret")
+library("randomForest")
+library("xgboost")
+library("h2o")
+library("keras")
+# use_session_with_seed(123456789) # setting the seed to obtain reproducible results
+# see https://keras.rstudio.com/articles/faq.html#how-can-i-obtain-reproducible-results-using-keras-during-development and https://cran.r-project.org/web/packages/keras/vignettes/faq.html
+# can also re-enable gpu and parallel processing by using:  use_session_with_seed(42, disable_gpu = FALSE, disable_parallel_cpu = FALSE)
+
+
+
+# other
+library("geosphere")          # specific for distance calculations from lat-lon pairs
+library("naniar")             # inspecting missing data
+library("rlang")              # building functions
+library("recipes")            # used in Keras modeling to design matrices
+library("rsample")            # rolling samples for validation stats
+library("tfruns")             # used in Keras modeling for trainin runs
+library("stringr")            # string manipulation
+library("ggplot2")            # viz
+library("sweep")              # more easily pull out model statistics
+library("yardstick")          # easily calculate accuracy stats
+library("doParallel")         # parallel processing
+
+```
+  
+    
+  Session Info.
+```{r}
+
+sessionInfo()
+
+```
+  
+    
+  Setup the root directory.
+```{r "setup", include = FALSE}
+
+require("knitr")
+
+opts_knit$set(root.dir = "/Users/mdturse/Desktop/Analytics/Chicago_El_Divvy/")
+
+```
+  
+    
+  Setting `wd` as the working directory.
+```{r}
+
+wd <- getwd()
+
+wd
+
+```
+
+
+## Modeling
+
+**NOTE: `h2o.limvars_accuracy_stats`, `DV_Fit.Rf.corr_no`, `DV_Fit.Xgbtree.corr_yes`, `func_one_hot_vars`, `run_times`, `h2o.time`, and `h2o.limvars.time` are the outputs produced in Step 02 - Step 05**
+```{r}
+
+h2o.limvars_accuracy_stats <-
+  readRDS(paste0(wd,
+                 "/Models/",
+                 "h2o.limvars_accuracy_stats.Rds"
+                 )
+          )
+
+DV_Fit.Rf.corr_no <-
+  readRDS(paste0(wd,
+                 "/Models/",
+                 "DV_Fit.Rf.corr_no.Rds"
+                 )
+          )
+
+DV_Fit.Xgbtree.corr_yes <-
+  readRDS(paste0(wd,
+                 "/Models/",
+                 "DV_Fit.Xgbtree.corr_yes.Rds"
+                 )
+          )
+
+func_one_hot_vars <-
+  readRDS(paste0(wd,
+                 "/Data/Interim/",
+                 "func_one_hot_vars.Rds"
+                 )
+          )
+
+run_times <-
+  readRDS(paste0(wd,
+                 "/Models/",
+                 "run_times.Rds"
+                 )
+          )
+
+h2o.time <-
+  readRDS(paste0(wd,
+                 "/Models/",
+                 "h2o.time.Rds"
+                 )
+          )
+
+h2o.limvars.time <-
+  readRDS(paste0(wd,
+                 "/Models/",
+                 "h2o.limvars.time.Rds"
+                 )
+          )
+
+```  
+
+
+## Accuracy Measurements  
+    
+  Now we can check some summary (RMSE) statistics. **NOTE: these are summary statistics based on the data used to build the models.**  
+    
+### Interpolation - ARIMA Model
+```{r}
+
+accuracy_interp_arima <-
+  pmap(.l = list(a = h2o.limvars_accuracy_stats),
+       .f = function(a) {
+           
+         interp_a =
+           map_dbl(a$arima,
+                   function(x) 
+                     sw_glance(x)[["RMSE"]]
+                   )
+         
+         interp_a_xreg =
+           map_dbl(a$arima_xreg,
+                   function(x) {
+                     y = x$best_fit %>% 
+                       sw_glance()
+                     
+                     y[["RMSE"]]
+                     }
+                   )
+         
+         a$arima.interpolation = interp_a
+         a$arima_xreg.interpolation = interp_a_xreg
+         
+         return(a)
+         }
+       )
+
+
+names(accuracy_interp_arima$`40600`)
+accuracy_interp_arima$`40600`$arima.interpolation
+accuracy_interp_arima$`40600`$arima_xreg.interpolation
+
+message("arima.interpolation")
+accuracy_interp_arima %>% 
+  map(~ summary(.x$arima.interpolation)
+      )
+
+message("arima_xreg.interpolation")
+accuracy_interp_arima %>% 
+  map(~ summary(.x$arima_xreg.interpolation)
+      )
+
+
+rm(h2o.limvars_accuracy_stats)
+
+```
+
+
+### Interpolation - Prophet Model
+```{r}
+
+get_interp_prophet <- function(split, pf) {
+  # Get analysis data
+  pred_dat =
+    analysis(split) %>% 
+    select(el_date,
+           el_rides
+         ) %>% 
+    left_join(select(pf,
+                     ds,
+                     yhat,
+                     yhat_zero_floor
+                     ) %>% 
+                mutate_at(vars(ds), as.Date),
+              by = c("el_date" = "ds")
+            ) %>% 
+    mutate(sqrd_error = (el_rides - yhat_zero_floor)^2
+           ) %>% 
+    arrange(el_date)
+
+  sqrt(mean(pred_dat$sqrd_error,
+            na.rm = TRUE
+            )
+       )
+  }    
+  
+
+accuracy_interp_prophet <-
+  pmap(.l = list(a = accuracy_interp_arima),
+       .f = function(a) {
+         interp =
+           map2_dbl(a$splits,
+                    a$prophet.forecast,
+                    get_interp_prophet
+                    )
+         
+         interp_hol =
+           map2_dbl(a$splits,
+                    a$prophet_hol.forecast,
+                    get_interp_prophet
+                    )
+         
+         a$prophet.interpolation = interp
+         
+         a$prophet_hol.interpolation = interp_hol
+         
+         return(a)
+         }
+       )
+
+
+names(accuracy_interp_prophet$`40600`)
+accuracy_interp_prophet$`40600`$prophet.interpolation
+accuracy_interp_prophet$`40600`$prophet_hol.interpolation
+
+message("prophet.interpolation")
+accuracy_interp_prophet %>% 
+  map(~ summary(.x$prophet.interpolation)
+      )
+
+message("prophet_hol.interpolation")
+accuracy_interp_prophet %>% 
+  map(~ summary(.x$prophet_hol.interpolation)
+      )
+
+
+# saving is done to avoid having to run the models again
+saveRDS(accuracy_interp_prophet,
+        paste0(wd,
+               "/Models/",
+               "accuracy_interp_prophet.Rds"
+               )
+        )
+
+# accuracy_interp_prophet <-
+#   readRDS(paste0(wd,
+#                  "/Models/",
+#                  "accuracy_interp_prophet.Rds"
+#                  )
+#           )
+
+
+rm(accuracy_interp_arima)
+
+```
+
+
+
+### Forecast & Interpolation - Random Forest Model  
+  
+  Get the forecasted data for the random forest and the xgboost tree.  
+    
+  First, I create a function to get the error percentages.
+```{r}
+
+get_pct_error <-
+  function(base, mod) {
+    data = bind_cols(base,
+                     mod
+                     ) %>% 
+      select(el_date,
+             el_rides,
+             yhat
+             ) %>%
+      rename(y = el_rides
+             ) %>%
+      # if_else is needed to prevent negative predictions
+      mutate(yhat_zero_floor = if_else(yhat < 0,
+                                       0,
+                                       yhat
+                                       ),
+             sqrd_error = (y - yhat_zero_floor)^2
+             ) %>%
+      arrange(el_date)
+    
+    return(data)
+    }
+
+```
+  
+    
+  Now I get the forecasts of all ML models as one list.
+```{r}
+
+rf_xgb_forecasts_combined <-
+  pmap(.l = list(a = accuracy_interp_prophet,
+                 b = DV_Fit.Rf.corr_no,
+                 c = DV_Fit.Xgbtree.corr_yes
+                 ),
+       .f = function(a, b, c) {
+         splits = a$splits
+         rf = b
+         xgb = c
+         
+         fcast =
+           pmap(.l = list(d = splits),
+                .f = function(d) {
+                  # prep the data
+                  analysis_assessment =
+                    analysis(d) %>% 
+                    mutate(type = "interpolation") %>% 
+                    bind_rows(assessment(d) %>% 
+                                mutate(type = "extrapolation")
+                              )
+                  
+                  one_hot =
+                    analysis_assessment %>% 
+                    func_one_hot_vars()
+                  
+                  one_hot_interp =
+                    one_hot %>% 
+                    filter(typeinterpolation == 1) %>% 
+                    select(-typeinterpolation,
+                           -typeextrapolation
+                           )
+                  
+                  one_hot_extrap = 
+                    one_hot %>% 
+                    filter(typeextrapolation == 1) %>% 
+                    select(-typeinterpolation,
+                           -typeextrapolation
+                           )
+                  
+                  complete_interp =
+                    one_hot_interp[complete.cases(one_hot_interp), ]
+                  
+                  complete_extrap =
+                    one_hot_extrap[complete.cases(one_hot_extrap), ]
+                  
+                  
+                  # predictions
+                  pred_rf.interp =
+                    predict(rf,
+                            newdata = complete_interp
+                            ) %>% 
+                    as.data.frame()
+                  
+                  names(pred_rf.interp) <- "yhat"
+                  
+                  pred_rf.extrap =
+                    predict(rf,
+                            newdata = complete_extrap
+                            ) %>% 
+                    as.data.frame()
+                  
+                  names(pred_rf.extrap) <- "yhat"
+                  
+                  
+                  pred_xgb.interp =
+                    predict(xgb,
+                            newdata = complete_interp
+                            ) %>% 
+                    as.data.frame()
+                  
+                  names(pred_xgb.interp) <- "yhat"
+                  
+                  pred_xgb.extrap =
+                    predict(xgb,
+                            newdata = complete_extrap
+                            ) %>% 
+                    as.data.frame()
+                  
+                  names(pred_xgb.extrap) <- "yhat"
+                  
+                  
+                  # add percent errors
+                  full_pred.rf.interp =
+                    get_pct_error(base = complete_interp,
+                                  mod = pred_rf.interp
+                                  )
+                  
+                  full_pred.rf.extrap =
+                    get_pct_error(base = complete_extrap,
+                                  mod = pred_rf.extrap
+                                  )
+                  
+                  
+                  full_pred.xgb.interp =
+                    get_pct_error(base = complete_interp,
+                                  mod = pred_xgb.interp
+                                  )
+                  
+                  full_pred.xgb.extrap =
+                    get_pct_error(base = complete_extrap,
+                                  mod = pred_xgb.extrap
+                                  )
+                  
+                  
+                  # result as a list
+                  full_pred_list =
+                    list(pred.rf.interp = full_pred.rf.interp,
+                         pred.rf.extrap = full_pred.rf.extrap,
+                         pred.xgb.interp = full_pred.xgb.interp,
+                         pred.xgb.extrap = full_pred.xgb.extrap
+                         )
+                  
+                  # return value
+                  return(full_pred_list)
+                  }
+                )
+         
+         a$ml_forecasts_all = fcast
+         
+         return(a)
+         }
+       )
+
+names(rf_xgb_forecasts_combined$`40600`)
+
+```
+  
+    
+  Now I separate the forecats into their own dataframes.
+```{r}
+
+rf_xgb_forecasts_individualized <-
+  pmap(.l = list(a = rf_xgb_forecasts_combined),
+       .f = function(a) {
+         fc = a$ml_forecasts_all
+
+         # limit results to the relevant model
+         result.rf.interp =
+           pmap(.l = list(b = fc),
+              .f = function(b) {
+                b$pred.rf.interp
+                }
+              )
+         
+         result.rf.extrap =
+           pmap(.l = list(b = fc),
+              .f = function(b) {
+                b$pred.rf.extrap
+                }
+              )
+         
+         result.xgb.interp =
+           pmap(.l = list(b = fc),
+              .f = function(b) {
+                b$pred.xgb.interp
+                }
+              )
+         
+         result.xgb.extrap =
+           pmap(.l = list(b = fc),
+              .f = function(b) {
+                b$pred.xgb.extrap
+                }
+              )
+         
+         a$rf.forecast_interp <- result.rf.interp
+         a$rf.forecast_extrap <- result.rf.extrap
+         a$xgb.forecast_interp <- result.xgb.interp
+         a$xgb.forecast_extrap <- result.xgb.extrap
+         
+         # remove no longer needed list of all forecasts
+         a$ml_forecasts_all <- NULL
+         
+         return(a)
+         }
+       )
+
+
+names(rf_xgb_forecasts_individualized$`40600`)
+
+
+rm(accuracy_interp_prophet, rf_xgb_forecasts_combined)
+
+```
+  
+    
+  Now I calculate the interpolation and extrapolation accuracy stats.
+```{r}
+
+# function to get the RMSE value
+get_interp_ML <- function(ML.fcast) {
+  pred_dat = ML.fcast
+  
+  sqrt(mean(pred_dat$sqrd_error,
+            na.rm = TRUE
+            )
+       )
+  }
+
+
+accuracy_interp_ML <-
+  pmap(.l = list(a = rf_xgb_forecasts_individualized),
+       .f = function(a) {
+         interp.rf =
+           map_dbl(a$rf.forecast_interp,
+                   get_interp_ML
+                   )
+         
+         extrap.rf =
+           map_dbl(a$rf.forecast_extrap,
+                   get_interp_ML
+                   )
+         
+         interp.xgb =
+           map_dbl(a$xgb.forecast_interp,
+                   get_interp_ML
+                   )
+         
+         extrap.xgb =
+           map_dbl(a$xgb.forecast_extrap,
+                   get_interp_ML
+                   )
+         
+         a$rf.interpolation <- interp.rf
+         a$rf.extrapolation <- extrap.rf
+         a$xgb.interpolation <- interp.xgb
+         a$xgb.extrapolation <- extrap.xgb
+         
+         return(a)
+         }
+       )
+
+
+names(accuracy_interp_ML$`40600`)
+accuracy_interp_ML$`40600`$rf.interpolation
+accuracy_interp_ML$`40600`$rf.extrapolation
+
+
+message("rf.interpolation")
+accuracy_interp_ML %>% 
+  map(~ summary(.x$rf.interpolation)
+      )
+
+message("rf.extrapolation")
+accuracy_interp_ML %>% 
+  map(~ summary(.x$rf.extrapolation)
+      )
+
+message("xgb.interpolation")
+accuracy_interp_ML %>% 
+  map(~ summary(.x$xgb.interpolation)
+      )
+
+message("xgb.extrapolation")
+accuracy_interp_ML %>% 
+  map(~ summary(.x$xgb.extrapolation)
+      )
+
+
+# saving is done to avoid having to run the models again
+saveRDS(accuracy_interp_ML,
+        paste0(wd,
+               "/Models/",
+               "accuracy_interp_ML.Rds"
+               )
+        )
+
+# accuracy_interp_ML <-
+#   readRDS(paste0(wd,
+#                  "/Models/",
+#                  "accuracy_interp_ML.Rds"
+#                  )
+#           )
+
+
+rm(rf_xgb_forecasts_individualized)
+
+```
+  
+    
+  Now we can check some summary (RMSE) statistics. **NOTE: these are summary statistics based on the data NOT used to build the models.**  
+    
+### Extrapolation - ARIMA Model  
+  
+  Function to get the ARIMA predictions.
+```{r}
+
+get_pred_arima <- function(split, mod) {
+  n <- nrow(assessment(split)
+            )
+  # Get assessment data
+  pred_dat <-
+    assessment(split) %>%
+    mutate(pred = as.vector(forecast(mod, h = n)$mean),
+           # if_else is used to put a floor of 0 (zero) for the prediction
+           pred_zero_floor = if_else(pred < 0,
+                                     0,
+                                     pred
+                                     ),
+           # pct_error = (el_rides - pred_zero_floor) / el_rides * 100,
+           sqrd_error = (el_rides - pred_zero_floor)^2
+           )
+  
+  return(pred_dat)
+  }
+
+```
+  
+    
+  Function to calculate the extrapolation stats
+```{r}
+
+get_extrap_arima <- function(arima.fcast) {
+  pred_dat = arima.fcast
+  
+  sqrt(mean(pred_dat$sqrd_error,
+            na.rm = TRUE
+            )
+       )
+  }
+
+```
+  
+    
+  Run the the forecast and extrapolation functions.
+```{r}
+
+accuracy_extrap_arima <-
+  pmap(.l = list(a = accuracy_interp_ML),
+       .f = function(a) {
+         pred =
+           map2(a$splits,
+                a$arima,
+                get_pred_arima
+               )
+         
+         a$arima.forecast <- pred
+         
+         return(a)
+         }
+       )
+
+
+accuracy_extrap_arima <-
+  pmap(.l = list(a = accuracy_extrap_arima),
+       .f = function(a) {
+         extrap <-
+           map_dbl(a$arima.forecast,
+                   get_extrap_arima
+                   )
+         
+         a$arima.extrapolation <- extrap
+         
+         return(a)
+         }
+       )
+
+names(accuracy_extrap_arima$`40600`)
+accuracy_extrap_arima$`40600`$arima.extrapolation
+
+accuracy_extrap_arima %>% 
+  map(~ summary(.x$arima.extrapolation)
+      )
+
+
+rm(accuracy_interp_ML)
+
+```
+
+
+### Extrapolation - ARIMA Model with XREG  
+  
+  Function to get the forecasts from the ARIMA XREG models. 
+```{r}
+
+get_pred_arima_xreg <-
+  function(split, mod) {
+    n = nrow(assessment(split)
+             )
+    
+    data_og =
+      split %>% 
+      assessment %>% 
+      mutate(holiday_binary = if_else(holiday == FALSE,
+                                      0,
+                                      1
+                                      )
+             )
+    
+    data_pred =
+      data_og %>% 
+      mutate(pred = as.vector(forecast(mod$best_fit,
+                                       xreg = cbind(mod$best_ts_365_fourier_future,
+                                                    # variables below identified based on "importance" from Random Forest and XGBTree models
+                                                    data_og$holiday_binary,
+                                                    data_og$year,
+                                                    data_og$half,
+                                                    data_og$quarter,
+                                                    data_og$month,
+                                                    data_og$mweek,
+                                                    data_og$wday.lbl,
+                                                    data_og$el_rides_l07,
+                                                    data_og$el_rides_l14,
+                                                    data_og$el_rides_l21,
+                                                    data_og$el_rides_l28,
+                                                    data_og$el_rides_ma07,
+                                                    data_og$el_rides_ma14,
+                                                    data_og$el_rides_ma21,
+                                                    data_og$el_rides_ma28
+                                    ),
+                                       h = n
+                                       )$mean
+                              ),
+             # if_else is used to put a floor of 0 (zero) for the prediction
+             pred_zero_floor = if_else(pred < 0,
+                                       0,
+                                       pred
+                                       ),
+             # pct_error = (el_rides - pred_zero_floor) / el_rides * 100
+             sqrd_error = (el_rides - pred_zero_floor)^2
+             )
+    }
+
+```
+  
+    
+  Function to calculate the extrapolation stats.
+```{r}
+
+get_extrap_arima_xreg <-
+  function(arima.fcast) {
+    pred_dat = arima.fcast
+
+    sqrt(mean(pred_dat$sqrd_error,
+              na.rm = TRUE
+              )
+         )
+    }
+
+```
+  
+    
+  Run the forecast and extrapolation functions.
+```{r}
+
+accuracy_extrap_arima_xreg <-
+  pmap(.l = list(a = accuracy_extrap_arima),
+       .f = function(a) {
+         pred <-
+           map2(a$splits,
+                a$arima_xreg,
+                get_pred_arima_xreg
+               )
+         
+         a$arima_xreg.forecast <- pred
+         
+         return(a)
+         }
+       )
+
+
+accuracy_extrap_arima_xreg <-
+  pmap(.l = list(a = accuracy_extrap_arima_xreg),
+       .f = function(a) {
+         extrap <-
+           map_dbl(a$arima_xreg.forecast,
+                   get_extrap_arima
+                   )
+         
+         a$arima_xreg.extrapolation <- extrap
+         
+         return(a)
+         }
+       )
+
+names(accuracy_extrap_arima_xreg$`40600`)
+accuracy_extrap_arima_xreg$`40600`$arima_xreg.extrapolation
+
+accuracy_extrap_arima_xreg %>% 
+  map(~ summary(.x$arima_xreg.extrapolation)
+      )
+
+
+rm(accuracy_extrap_arima)
+
+
+```
+
+
+### Extrapolation - Prophet Model  
+  
+  Function to get the extrapolation stats.
+```{r}
+
+get_extrap_prophet <- function(split, pf) {
+  # Get assessment data
+  pred_dat <-
+    assessment(split) %>% 
+    select(el_date,
+           el_rides
+         ) %>% 
+    left_join(select(pf,
+                     ds,
+                     yhat,
+                     yhat_zero_floor
+                     ) %>% 
+                mutate_at(vars(ds), as.Date),
+              by = c("el_date" = "ds")
+            ) %>% 
+    mutate(sqrd_error = (el_rides - yhat_zero_floor)^2 
+           ) %>% 
+    arrange(el_date)
+
+  sqrt(mean(pred_dat$sqrd_error,
+            na.rm = TRUE
+            )
+       )
+  }    
+  
+```
+  
+    
+  Run the extrapolation stats function.
+```{r}
+
+accuracy_extrap_prophet <-
+  pmap(.l = list(a = accuracy_extrap_arima_xreg),
+       .f = function(a) {
+         extrap <-
+           map2_dbl(a$splits,
+                    a$prophet.forecast,
+                    get_extrap_prophet
+                    )
+         
+         extrap_hol <-
+           map2_dbl(a$splits,
+                    a$prophet_hol.forecast,
+                    get_extrap_prophet
+                    )
+         
+         a$prophet.extrapolation <- extrap
+         
+         a$prophet_hol.extrapolation <- extrap_hol
+         
+         return(a)
+         }
+       )
+
+
+# saving is done to avoid having to run the models again
+saveRDS(accuracy_extrap_prophet,
+        paste0(wd,
+               "/Models/",
+               "accuracy_extrap_prophet.Rds"
+               )
+        )
+
+# accuracy_extrap_prophet <-
+#   readRDS(paste0(wd,
+#                  "/Models/",
+#                  "accuracy_extrap_prophet.Rds"
+#                  )
+#           )
+
+names(accuracy_extrap_prophet$`40600`)
+accuracy_extrap_prophet$`40600`$prophet.extrapolation
+accuracy_extrap_prophet$`40600`$prophet_hol.extrapolation
+
+message("prophet")
+accuracy_extrap_prophet %>% 
+  map(~ summary(.x$prophet.extrapolation)
+      )
+
+message("prophet_hol")
+accuracy_extrap_prophet %>% 
+  map(~ summary(.x$prophet_hol.extrapolation)
+      )
+
+
+rm(accuracy_extrap_arima_xreg)
+
+```
+  
+    
+  Add an identifier for the relevant `el_stop_id` value.
+```{r}
+  
+add_el_stop_id <-
+  pmap(.l = list(a = accuracy_extrap_prophet,
+                 c = names(accuracy_extrap_prophet)
+                 ),
+       .f = function(a, c) {
+         a$el_stop_id <- c
+         
+         return(a)
+       }
+       )
+
+# saving is done to avoid having to run the forecasts again
+saveRDS(add_el_stop_id,
+        paste0(wd,
+               "/Models/",
+               "add_el_stop_id.Rds"
+               )
+        )
+
+# add_el_stop_id <-
+#   readRDS(paste0(wd,
+#                  "/Models/",
+#                  "add_el_stop_id.Rds"
+#                  )
+#           )
+
+
+names(add_el_stop_id$`40600`)
+names(add_el_stop_id$`40910`)
+
+
+rm(accuracy_extrap_prophet)
+
+```
+  
+    
+  Now I simply update the `run_times` dataset with the relevant h2o info.
+```{r}
+
+
+run_times[9:10] <-
+  list(h2o = as.list(h2o.time),
+       h2o.limvars = as.list(h2o.limvars.time)
+       )
+
+names(run_times)[9:10] <- c("h2o", "h2o.limvars")
+
+
+str(run_times)
+
+
+# saving is done to avoid having to run the forecasts again
+saveRDS(run_times,
+        paste0(wd,
+               "/Models/",
+               "run_times.Rds"
+               )
+        )
+
+# run_times <-
+#   readRDS(paste0(wd,
+#                  "/Models/",
+#                  "run_times.Rds"
+#                  )
+#           )
+
+```
+
+
