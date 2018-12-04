@@ -209,7 +209,6 @@ rm(remove_first_28na_rows, func_train_test_indicator)
 
 
   **To Delete (below) when no longer needed**
-  
 ```{r}
 
 # add_trn_val_test <-
@@ -223,7 +222,6 @@ rm(remove_first_28na_rows, func_train_test_indicator)
 # str(add_trn_val_test$`41140`)
 
 ```
-
   **To Delete (above) when no longer needed**
 
 
